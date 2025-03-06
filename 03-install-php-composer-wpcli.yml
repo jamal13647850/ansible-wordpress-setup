@@ -65,16 +65,7 @@
         curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer  
       args:  
         creates: /usr/local/bin/composer  
-
-    - name: Test Composer installation  
-      command: composer --version  
-      register: composer_version  
-      changed_when: false  
-
-    - name: Display composer version    
-      debug:  
-        msg: "Composer version {{ composer_version.stdout }} installed successfully."  
-      when: ansible_verbosity > 1  
+ 
 
     - name: Install WP-CLI  
       get_url:  

@@ -8,12 +8,36 @@
         dest: "/etc/nginx/sites-available/{{ domain }}"  
       notify: Restart Nginx  
 
-    - name: Enable Nginx site  
-      file:  
-        src: "/etc/nginx/sites-available/{{ domain }}"  
-        dest: "/etc/nginx/sites-enabled/{{ domain }}"  
-        state: link  
-      notify: Restart Nginx  
+    - name: Ensure sites-available directory exists
+      ansible.builtin.file:
+        path: /etc/nginx/sites-available
+        state: directory
+        mode: '0755'
+      become: true
+
+    - name: Ensure sites-enabled directory exists
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled
+        state: directory
+        mode: '0755'
+      become: true
+
+    - name: Configure Nginx for WordPress
+      template:
+        src: templates/nginx.conf.j2
+        dest: /etc/nginx/sites-available/{{ domain }}
+        mode: '0644'
+      become: true
+
+    - name: Enable Nginx site
+      ansible.builtin.file:
+        src: /etc/nginx/sites-available/{{ domain }}
+        dest: /etc/nginx/sites-enabled/{{ domain }}
+        state: link
+        force: yes
+      become: true
+      notify: Restart Nginx
+
 
     - name: Add user to www-data group  
       user:  
@@ -57,11 +81,11 @@
         chdir: "/var/www/{{ domain }}/html"  
       become_user: "{{ linux_username }}"  
 
-    - name: Install WordPress  
-      shell: wp core install --url=https://{{ domain }} --title='{{ wordpress_title }}' --admin_user={{ wordpress_admin_user }} --admin_password='{{ wordpress_admin_password }}' --admin_email={{ wordpress_admin_email }}  
-      args:  
-        chdir: "/var/www/{{ domain }}/html"  
-      become_user: "{{ linux_username }}"  
+    - name: Install WordPress
+      ansible.builtin.shell: sudo -u www-data wp core install --url='http://{{ domain }}' --title='{{ wordpress_title }}' --admin_user='{{ wordpress_admin_user }}' --admin_password='{{ wordpress_admin_password }}' --admin_email='{{ wordpress_admin_email }}'
+      args:
+        chdir: /var/www/{{ domain }}/html
+      become: true 
 
     - name: Set correct permissions for directories  
       file:  
@@ -79,16 +103,12 @@
         recurse: yes  
       register: wp_files  
 
-    - name: Apply file permissions  
-      file:  
-        path: "{{ item.path }}"  
-        mode: '0664'  
-        owner: www-data  
-        group: www-data  
-      loop: "{{ wp_files.files }}"  
 
-  handlers:  
-    - name: Restart Nginx  
-      service:  
-        name: nginx  
-        state: restarted  
+
+
+  handlers:
+  - name: Restart Nginx
+    ansible.builtin.service:
+      name: nginx
+      state: restarted
+    become: true
