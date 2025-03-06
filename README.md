@@ -119,13 +119,15 @@ ansible-playbook -i inventory \
   02-install-nginx.yml \
   03-install-php-composer-wpcli.yml \
   04-install-wordpress.yml \
-  05-obtain-ssl.yml
+  05-obtain-ssl.yml \
+  --ask-become-pass
 ```
 
-If `all.yml` is encrypted, add the Vault password flag:
-```bash
-ansible-playbook -i inventory --ask-vault-pass ...
-```
+- Use `--ask-become-pass` (or `-K`) to provide the sudo password for the VPS user if required.
+- If `all.yml` is encrypted, add both flags:
+  ```bash
+  ansible-playbook -i inventory --ask-vault-pass --ask-become-pass ...
+  ```
 
 ### **Step 5: Verify**
 - Visit `https://yourdomain.com` to ensure WordPress is running.
@@ -246,9 +248,14 @@ ansible-playbook -i inventory \
   02-install-nginx.yml \
   03-install-php-composer-wpcli.yml \
   04-install-wordpress.yml \
-  05-obtain-ssl.yml
+  05-obtain-ssl.yml \
+  --ask-become-pass
 ```
-Use `--ask-vault-pass` if encrypted.
+- Use `--ask-become-pass` to enter the sudo password if required.
+- If encrypted, add `--ask-vault-pass`:
+  ```bash
+  ansible-playbook -i inventory --ask-vault-pass --ask-become-pass ...
+  ```
 
 ### **Step 6: Verify**
 - Access `https://yourdomain.com`.
@@ -298,6 +305,7 @@ Use `--ask-vault-pass` if encrypted.
 
 ## **Troubleshooting**
 - **SSH Issues:** Verify `sudo netstat -tuln | grep 2222` and key in `~/.ssh/authorized_keys`.
+- **Sudo Password:** Use `--ask-become-pass` if prompted for a sudo password.
 - **Nginx Errors:** Check `/var/www/yourdomain.com/logs/error.log`.
 - **Certbot:** Ensure DNS is set (`dig yourdomain.com`).
 - **Permissions:** Fix with `sudo chown -R www-data:www-data /var/www/yourdomain.com`.
