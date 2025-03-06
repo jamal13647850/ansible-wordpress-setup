@@ -1,0 +1,25 @@
+- hosts: all  
+  become: true  
+
+  tasks:  
+    - name: Install Certbot  
+      apt:  
+        name: python3-certbot-nginx  
+        state: latest  
+        update_cache: yes  
+
+    - name: Check if SSL certificate exists  
+      stat:  
+        path: "/etc/letsencrypt/live/{{ domain }}/fullchain.pem"  
+      register: ssl_cert  
+
+    - name: Obtain SSL certificate with Certbot  
+      command: certbot --nginx -d {{ domain }} -d www.{{ domain }} --email {{ ssl_email }} --agree-tos --redirect --non-interactive  
+      when: not ssl_cert.stat.exists  
+      notify: Restart Nginx  
+
+  handlers:  
+    - name: Restart Nginx  
+      service:  
+        name: nginx  
+        state: restarted  

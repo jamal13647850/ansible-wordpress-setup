@@ -1,0 +1,43 @@
+- hosts: all  
+  become: true  
+
+  tasks:  
+    - name: Update package lists  
+      apt:  
+        update_cache: yes  
+
+    - name: Upgrade all packages  
+      apt:  
+        name: "*"  
+        state: latest  
+      register: apt_upgrade  
+
+    - name: Install additional tools  
+      apt:  
+        name:  
+          - bashtop        # System monitoring tool
+          - tmux           # Terminal multiplexer
+          - wget           # File downloader
+          - curl           # Data transfer tool
+          - nano           # Text editor
+          - tar            # Archiving utility
+          - clamav         # Antivirus software
+          - rkhunter       # Rootkit hunter
+          - rsync          # File synchronization tool
+        state: present  
+        update_cache: yes  
+
+    - name: Add cleancache alias to .bashrc  
+      lineinfile:  
+        path: "/home/{{ linux_username }}/.bashrc"  
+        line: "alias cleancache{{ domain | replace('.', '') }}='rm -rf /etc/nginx/cache/{{ domain }}/*'"  
+        state: present  
+        owner: "{{ linux_username }}"  
+        group: "{{ linux_username }}"  
+        mode: '0644'  
+      become: false  # Run as the specified user, not root
+
+    - name: Reboot server if needed  
+      reboot:  
+        reboot_timeout: 600  
+      when: apt_upgrade.changed  

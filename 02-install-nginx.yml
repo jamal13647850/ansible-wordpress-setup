@@ -1,0 +1,70 @@
+- hosts: all
+  become: true
+  tasks:
+    - name: Add Nginx official repository
+      apt_repository:
+        repo: "deb http://nginx.org/packages/ubuntu {{ ansible_distribution_release }} nginx"
+        state: present
+        update_cache: yes
+
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: latest
+        update_cache: yes
+
+    - name: Install CSF (ConfigServer Security & Firewall)
+      shell: |
+        wget https://download.configserver.com/csf.tgz
+        tar -xzf csf.tgz
+        cd csf && sh install.sh
+      args:
+        creates: /etc/csf/csf.conf
+
+    - name: Start Nginx service
+      systemd:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Create helper directory
+      file:
+        path: "/etc/nginx/sites-available/{{ domain }}helper"
+        state: directory
+        mode: '0755'
+
+    - name: Copy helper configuration files
+      copy:
+        src: "{{ item }}"
+        dest: "/etc/nginx/sites-available/{{ domain }}helper/{{ item | basename }}"
+        mode: '0644'
+      loop:
+        - examplehelper/arvancloud-ip-sync.sh
+        - examplehelper/cache.conf
+        - examplehelper/cloudflare-ip-sync.sh
+        - examplehelper/cloudflare.conf
+        - examplehelper/filemanager.conf
+        - examplehelper/general.conf
+        - examplehelper/gzip.conf
+        - examplehelper/keepalive.conf
+        - examplehelper/redirects.conf
+        - examplehelper/securityheaders.conf
+        - examplehelper/wordpress.conf
+
+    - name: Make sync scripts executable
+      file:
+        path: "/etc/nginx/sites-available/{{ domain }}helper/{{ item }}"
+        mode: '0755'
+      loop:
+        - arvancloud-ip-sync.sh
+        - cloudflare-ip-sync.sh
+
+    - name: Run Cloudflare IP sync
+      shell: "/etc/nginx/sites-available/{{ domain }}helper/cloudflare-ip-sync.sh"
+      args:
+        creates: "/etc/nginx/sites-available/{{ domain }}helper/cloudflare.conf"
+
+    - name: Run ArvanCloud IP sync
+      shell: "/etc/nginx/sites-available/{{ domain }}helper/arvancloud-ip-sync.sh"
+      args:
+        creates: "/etc/nginx/sites-available/{{ domain }}helper/arvancloud.conf"
