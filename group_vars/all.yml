@@ -15,3 +15,7 @@ wordpress_db_prefix: "wp_"
 ssl_email: "your@email.com"
 php_version: "8.3"
 linux_username: "ubuntu"  # Your server user
+
+# IP restriction settings
+restrict_ip_access: false  
+allowed_ips: []           

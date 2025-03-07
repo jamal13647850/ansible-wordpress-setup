@@ -41,22 +41,41 @@
         mode: '0755'
 
     - name: Copy helper configuration files
-      copy:
+      ansible.builtin.template:
         src: "{{ item }}"
-        dest: "/etc/nginx/sites-available/{{ domain }}helper/{{ item | basename }}"
+        dest: "/etc/nginx/sites-available/{{ domain }}helper/{{ item | basename | regex_replace('.j2$', '') }}"
         mode: '0644'
       loop:
-        - examplehelper/arvancloud-ip-sync.sh
-        - examplehelper/cache.conf
-        - examplehelper/cloudflare-ip-sync.sh
-        - examplehelper/cloudflare.conf
-        - examplehelper/filemanager.conf
-        - examplehelper/general.conf
-        - examplehelper/gzip.conf
-        - examplehelper/keepalive.conf
-        - examplehelper/redirects.conf
-        - examplehelper/securityheaders.conf
-        - examplehelper/wordpress.conf
+        - templates/arvancloud-ip-sync.sh.j2
+        - templates/cache.conf.j2
+        - templates/cloudflare-ip-sync.sh.j2
+        - templates/cloudflare.conf.j2
+        - templates/filemanager.conf.j2
+        - templates/general.conf.j2
+        - templates/gzip.conf.j2
+        - templates/keepalive.conf.j2
+        - templates/redirects.conf.j2
+        - templates/securityheaders.conf.j2
+        - templates/wordpress.conf.j2
+      notify: Restart Nginx
+
+    - name: Install htpasswd package on target server
+      apt:
+        name: apache2-utils
+        state: present
+        update_cache: yes
+
+    - name: Create .htpasswd file for Basic Authentication
+      htpasswd:
+        path: "/etc/nginx/sites-available/{{ domain }}helper/.htpasswd"
+        name: "{{ basic_auth_user }}"
+        password: "{{ basic_auth_password }}"
+        owner: www-data
+        group: www-data
+        mode: '0640'
+        state: present
+      when: enable_basic_auth | bool
+      notify: Restart Nginx  
 
     - name: Make sync scripts executable
       file:
@@ -75,3 +94,9 @@
       shell: "/etc/nginx/sites-available/{{ domain }}helper/arvancloud-ip-sync.sh"
       args:
         creates: "/etc/nginx/sites-available/{{ domain }}helper/arvancloud.conf"
+
+  handlers:
+    - name: Restart Nginx
+      ansible.builtin.service:
+        name: nginx
+        state: restarted

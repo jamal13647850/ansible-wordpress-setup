@@ -7,16 +7,31 @@ limit_req_log_level warn;
 limit_req_zone $binary_remote_addr zone=login:10m rate=10r/m;
 
 # HTTP Server (redirects to HTTPS)
+
 server {
+    if ($host = www.www.{{ domain }}) {
+        return 301 https://$host$request_uri;
+    } 
+
+
+    if ($host = www.{{ domain }}) {
+        return 301 https://$host$request_uri;
+    } 
+
+
     listen 80;
-    server_name {{ domain }} www.{{ domain }};
-    return 301 https://$host$request_uri;
+
+    server_name www.{{ domain }} www.{{ domain }};
+    return 404; 
+
 }
+
 
 # HTTPS Server
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
 
     server_name {{ domain }} www.{{ domain }};
     root /var/www/{{ domain }}/html;
@@ -32,9 +47,9 @@ server {
     ssl_trusted_certificate /etc/letsencrypt/live/{{ domain }}/chain.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers on;
-    ssl_ciphers EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH;
+    #ssl_protocols TLSv1.2 TLSv1.3;
+    #ssl_prefer_server_ciphers on;
+    #ssl_ciphers EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH;
 
     # Performance optimizations
     proxy_read_timeout 700;
@@ -70,7 +85,7 @@ server {
 
     # PHP processing
     location ~ \.php$ {
-        include snippets/fastcgi-php.conf;
+        include fastcgi_params;
         proxy_busy_buffers_size 512k;
         proxy_buffers 4 512k;
         proxy_buffer_size 256k;

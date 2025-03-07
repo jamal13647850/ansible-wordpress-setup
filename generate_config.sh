@@ -37,6 +37,43 @@ MYSQL_DB_PASSWORD=$(generate_password)
 WP_ADMIN_PASSWORD=$(generate_password)
 WP_DB_PREFIX=$(generate_db_prefix)
 
+# IP restriction configuration
+echo -e "\nIP Restriction Configuration"
+echo "-----------------------------"
+read -p "Would you like to restrict access to specific IPs for WordPress recovery and file manager? (y/n): " RESTRICT_IP
+if [[ "$RESTRICT_IP" =~ ^[Yy]$ ]]; then
+    RESTRICT_IP_ACCESS="true"
+    echo "Enter allowed IP addresses (one per line). Press Ctrl+D or Ctrl+C when done:"
+    ALLOWED_IPS=""
+    while IFS= read -r ip; do
+        # ساده‌سازی: حذف فاصله‌ها و اطمینان از اینکه خط خالی نباشه
+        ip=$(echo "$ip" | xargs)
+        if [[ -n "$ip" ]]; then
+            ALLOWED_IPS="$ALLOWED_IPS  - \"$ip\"\n"
+        fi
+    done
+else
+    RESTRICT_IP_ACCESS="false"
+    ALLOWED_IPS=""
+fi
+
+
+
+# Basic Auth configuration
+echo -e "\nBasic Authentication Configuration"
+echo "----------------------------------"
+read -p "Would you like to enable Basic Authentication for file manager and WordPress recovery? (y/n): " ENABLE_AUTH
+if [[ "$ENABLE_AUTH" =~ ^[Yy]$ ]]; then
+    ENABLE_BASIC_AUTH="true"
+    read -p "Enter username for Basic Authentication: " BASIC_AUTH_USER
+    read -s -p "Enter password for Basic Authentication: " BASIC_AUTH_PASSWORD
+    echo ""  # خط جدید بعد از وارد کردن رمز
+else
+    ENABLE_BASIC_AUTH="false"
+    BASIC_AUTH_USER=""
+    BASIC_AUTH_PASSWORD=""
+fi
+
 # Create or overwrite the all.yml file
 cat <<EOF > "$OUTPUT_FILE"
 ---
@@ -54,12 +91,35 @@ wordpress_db_prefix: "$WP_DB_PREFIX"
 ssl_email: "$SSL_EMAIL"
 php_version: "$PHP_VERSION"
 linux_username: "$LINUX_USERNAME"
+# IP restriction settings
+restrict_ip_access: $RESTRICT_IP_ACCESS
+allowed_ips:
+$ALLOWED_IPS
+# Basic Auth settings
+enable_basic_auth: $ENABLE_BASIC_AUTH
+basic_auth_user: "$BASIC_AUTH_USER"
+basic_auth_password: "$BASIC_AUTH_PASSWORD"
 EOF
+
+
+
 
 # Secure the file permissions
 chmod 600 "$OUTPUT_FILE"
 
+
+
 # Display the generated values
+if [[ "$ENABLE_BASIC_AUTH" == "true" ]]; then
+    echo "Basic Authentication Enabled: Yes"
+    echo "Basic Auth Username: $BASIC_AUTH_USER"
+    echo "Basic Auth Password: [hidden for security]"
+else
+    echo "Basic Authentication Enabled: No"
+fi
+
+
+
 echo -e "\nConfiguration file '$OUTPUT_FILE' has been created with the following values:"
 echo "------------------------------------------------"
 echo "MySQL Root Password: $MYSQL_ROOT_PASSWORD"
@@ -68,6 +128,13 @@ echo "MySQL Database User: $MYSQL_DB_USER"
 echo "MySQL Database Password: $MYSQL_DB_PASSWORD"
 echo "WordPress Admin Password: $WP_ADMIN_PASSWORD"
 echo "WordPress Database Prefix: $WP_DB_PREFIX"
+if [[ "$RESTRICT_IP_ACCESS" == "true" ]]; then
+    echo "IP Restriction Enabled: Yes"
+    echo "Allowed IPs:"
+    echo "$ALLOWED_IPS" | sed 's/  - /  - /g'
+else
+    echo "IP Restriction Enabled: No"
+fi
 echo "------------------------------------------------"
 echo "Please save these values in a secure place!"
 

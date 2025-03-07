@@ -1,22 +1,28 @@
-#allow recover duplicator pro for two ip
+# Allow recover duplicator pro based on IP restriction settings
 location ~* ^/(?:wp-content/backups-dup-pro/recover)/.*\.php$ {
-    	allow 185.235.41.193;
-    	allow 65.108.163.73;
-	deny all;
+    {% if restrict_ip_access %}
+    {% for ip in allowed_ips %}
+    allow {{ ip }};
+    {% endfor %}
+    deny all;
+    {% endif %}
 
-	include snippets/fastcgi-php.conf;
-        fastcgi_cache_bypass $no_cache;
-        fastcgi_no_cache $no_cache;
-        fastcgi_cache phpcacheexample; # The name of the cache key-zone to use
-        fastcgi_cache_valid 200 30m; # What to cache: 'Code 200' responses, for half an hour
-        fastcgi_cache_methods GET HEAD; # What to cache: only GET and HEAD requests (not POST)
-        fastcgi_max_temp_file_size 0;
+    {% if enable_basic_auth %}
+    auth_basic "Restricted";
+    auth_basic_user_file /etc/nginx/sites-available/{{ domain }}helper/.htpasswd;
+    {% endif %}
 
-        add_header X-Fastcgi-Cache $upstream_cache_status; # Add header so we can see if the cache hits or misses
-        fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
-        include    /etc/nginx/sites-available/examplehelper/securityheaders.conf;
+    include fastcgi_params;
+    fastcgi_cache_bypass $no_cache;
+    fastcgi_no_cache $no_cache;
+    fastcgi_cache phpcache_{{ domain }};
+    fastcgi_cache_valid 200 30m;
+    fastcgi_cache_methods GET HEAD;
+    fastcgi_max_temp_file_size 0;
+    add_header X-Fastcgi-Cache $upstream_cache_status;
+    fastcgi_pass unix:/var/run/php/php{{ php_version }}-fpm.sock;
+    include /etc/nginx/sites-available/{{ domain }}helper/securityheaders.conf;
 }
-
 # WordPress: deny wp-content, wp-includes php files
 location ~* ^/(?:wp-content|wp-includes)/.*\.php$ {
     deny all;
@@ -49,17 +55,17 @@ location ~* ^/(?:xmlrpc\.php|wp-links-opml\.php|wp-config\.php|wp-config-sample\
 location = /wp-login.php {
     	limit_req zone=login burst=2 nodelay;
        
-	include snippets/fastcgi-php.conf;
+	include fastcgi_params;
         fastcgi_cache_bypass $no_cache;
         fastcgi_no_cache $no_cache;
-        fastcgi_cache phpcacheexample; # The name of the cache key-zone to use
+        fastcgi_cache phpcache_{{ domain }}; # The name of the cache key-zone to use
         fastcgi_cache_valid 200 30m; # What to cache: 'Code 200' responses, for half an hour
         fastcgi_cache_methods GET HEAD; # What to cache: only GET and HEAD requests (not POST)
         fastcgi_max_temp_file_size 0;
 
         add_header X-Fastcgi-Cache $upstream_cache_status; # Add header so we can see if the cache hits or misses
         fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
-        include    /etc/nginx/sites-available/examplehelper/securityheaders.conf;
+        include    /etc/nginx/sites-available/{{ domain }}helper/securityheaders.conf;
 }
 
 # BEGIN iThemes Security - این خط را اصلاح و یا حذف نکنید
@@ -245,17 +251,17 @@ location = /wp-login.php {
 		allow 185.235.41.193;
     		allow 65.108.163.73;
 		deny all;
-		include snippets/fastcgi-php.conf;
+		include fastcgi_params;
         	fastcgi_cache_bypass $no_cache;
         	fastcgi_no_cache $no_cache;
-        	fastcgi_cache phpcacheexample; # The name of the cache key-zone to use
+        	fastcgi_cache phpcache_{{ domain }}; # The name of the cache key-zone to use
         	fastcgi_cache_valid 200 30m; # What to cache: 'Code 200' responses, for half an hour
        	 	fastcgi_cache_methods GET HEAD; # What to cache: only GET and HEAD requests (not POST)
         	fastcgi_max_temp_file_size 0;
 
         	add_header X-Fastcgi-Cache $upstream_cache_status; # Add header so we can see if the cache hits or misses
         	fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
-        	include    /etc/nginx/sites-available/examplehelper/securityheaders.conf;
+        	include    /etc/nginx/sites-available/{{ domain }}helper/securityheaders.conf;
 	 }
 	location = /nginx.conf { deny all; }
 	location ~ /\.htaccess$ { deny all; }
