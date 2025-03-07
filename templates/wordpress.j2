@@ -21,6 +21,8 @@ location ~* ^/(?:wp-content/backups-dup-pro/recover)/.*\.php$ {
     fastcgi_max_temp_file_size 0;
     add_header X-Fastcgi-Cache $upstream_cache_status;
     fastcgi_pass unix:/var/run/php/php{{ php_version }}-fpm.sock;
+	fastcgi_index index.php;
+    fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
     include /etc/nginx/sites-available/{{ domain }}helper/securityheaders.conf;
 }
 # WordPress: deny wp-content, wp-includes php files
@@ -65,6 +67,8 @@ location = /wp-login.php {
 
         add_header X-Fastcgi-Cache $upstream_cache_status; # Add header so we can see if the cache hits or misses
         fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+		fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         include    /etc/nginx/sites-available/{{ domain }}helper/securityheaders.conf;
 }
 
@@ -261,6 +265,8 @@ location = /wp-login.php {
 
         	add_header X-Fastcgi-Cache $upstream_cache_status; # Add header so we can see if the cache hits or misses
         	fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+			fastcgi_index index.php;
+        	fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         	include    /etc/nginx/sites-available/{{ domain }}helper/securityheaders.conf;
 	 }
 	location = /nginx.conf { deny all; }
