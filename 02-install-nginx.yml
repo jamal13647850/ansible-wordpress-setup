@@ -28,6 +28,15 @@
       args:
         creates: /etc/csf/csf.conf
 
+
+    - name: Ensure Nginx runs as www-data user
+      lineinfile:
+        path: /etc/nginx/nginx.conf
+        regexp: '^user\s+.*;'
+        line: 'user www-data;'
+        state: present
+      notify: Restart Nginx
+      
     - name: Start Nginx service
       systemd:
         name: nginx
