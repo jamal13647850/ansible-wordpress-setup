@@ -106,9 +106,9 @@ echo "------------------------------"
 read -p "Would you like to install and configure Redis for WordPress caching? (y/n): " INSTALL_REDIS
 if [[ "$INSTALL_REDIS" =~ ^[Yy]$ ]]; then
     INSTALL_REDIS="true"
-    WP_REDIS_HOST="127.0.0.1"  # Default localhost
-    WP_REDIS_PORT="6379"       # Default Redis port
-    WP_REDIS_PASSWORD=$(generate_password)  # Generate a secure password
+    WP_REDIS_HOST="127.0.0.1"
+    WP_REDIS_PORT="6379"
+    WP_REDIS_PASSWORD=$(generate_password)
     read -p "Enter Redis database number (0-15, default: 0): " WP_REDIS_DATABASE
     WP_REDIS_DATABASE=${WP_REDIS_DATABASE:-"0"}
 else
@@ -117,6 +117,30 @@ else
     WP_REDIS_PORT=""
     WP_REDIS_PASSWORD=""
     WP_REDIS_DATABASE=""
+fi
+
+# WordPress plugins configuration (optional)
+echo -e "\nWordPress Plugins Configuration (Optional)"
+echo "------------------------------------------"
+read -p "Would you like to install WordPress plugins? (y/n): " INSTALL_PLUGINS
+if [[ "$INSTALL_PLUGINS" =~ ^[Yy]$ ]]; then
+    INSTALL_PLUGINS="true"
+    echo "Enter plugins to install. For plugins from WordPress.org, enter the slug (e.g., 'redis-cache')."
+    echo "For local ZIP files, enter the full path (e.g., '/path/to/plugin.zip'). Press Ctrl+D or Ctrl+C when done:"
+    PLUGINS=""
+    while IFS= read -r plugin; do
+        plugin=$(echo "$plugin" | xargs)
+        if [[ -n "$plugin" ]]; then
+            if [[ "$plugin" =~ \.zip$ && -f "$plugin" ]]; then
+                PLUGINS="$PLUGINS  - { path: \"$plugin\", source: \"local\" }\n"
+            else
+                PLUGINS="$PLUGINS  - { slug: \"$plugin\", source: \"wordpress\" }\n"
+            fi
+        fi
+    done
+else
+    INSTALL_PLUGINS="false"
+    PLUGINS=""
 fi
 
 # Create or overwrite the all.yml file
@@ -158,6 +182,10 @@ wp_redis_host: "$WP_REDIS_HOST"
 wp_redis_port: "$WP_REDIS_PORT"
 wp_redis_password: "$WP_REDIS_PASSWORD"
 wp_redis_database: "$WP_REDIS_DATABASE"
+# WordPress plugins settings
+install_plugins: $INSTALL_PLUGINS
+plugins:
+$PLUGINS
 EOF
 
 # Secure the file permissions
@@ -201,6 +229,13 @@ if [[ "$INSTALL_REDIS" == "true" ]]; then
     echo "WP_REDIS_DATABASE: $WP_REDIS_DATABASE"
 else
     echo "Redis Installation Enabled: No"
+fi
+if [[ "$INSTALL_PLUGINS" == "true" ]]; then
+    echo "Plugins Installation Enabled: Yes"
+    echo "Plugins to Install:"
+    echo "$PLUGINS" | sed 's/  - /  - /g'
+else
+    echo "Plugins Installation Enabled: No"
 fi
 echo "------------------------------------------------"
 echo "Please save these values in a secure place!"

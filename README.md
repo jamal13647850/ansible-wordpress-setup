@@ -19,6 +19,7 @@ This repository provides a set of Ansible playbooks to automate the deployment o
 - **Custom WordPress Configurations:** Allows setting `WP_MEMORY_LIMIT`, `WP_MAX_MEMORY_LIMIT`, `FORCE_SSL_LOGIN`, `FORCE_SSL_ADMIN`, `DISALLOW_FILE_EDIT`, `FS_METHOD`, and `DISABLE_WP_CRON` via `generate_config.sh`.
 - **System Cron for WP-Cron:** Optionally disables WordPress's built-in cron and sets up a system cron job to run `wp-cron.php` every minute.
 - **Optional Redis Integration:** Installs and configures Redis for caching, with customizable settings (`WP_REDIS_HOST`, `WP_REDIS_PORT`, `WP_REDIS_PASSWORD`, `WP_REDIS_DATABASE`) in `wp-config.php`.
+- **Custom Plugin Installation:** Installs an unlimited number of WordPress plugins from the WordPress.org repository (via slug) or local ZIP files, with all plugins remaining deactivated after installation.
 
 
 ---
@@ -93,6 +94,7 @@ chmod +x generate_config.sh
 ```
 
 - **Prompts:** The script will ask for:
+  - **WordPress Plugins (Optional):** Option to install plugins by entering slugs (e.g., `redis-cache`) for WordPress.org plugins or full paths to local ZIP files (e.g., `/path/to/plugin.zip`).
   - **Redis (Optional):** Option to install Redis, with prompts for database number and auto-generated secure password.
   - **WordPress Configurations:** Options to set memory limits, SSL enforcement, file editing restrictions, filesystem method, and cron behavior.
   - Domain name (e.g., `mysite.com`)
@@ -308,6 +310,7 @@ ansible-playbook -i inventory \
 - Ensure DNS points to your VPS IP.
 - Secure `group_vars/all.yml` or remove it if not encrypted.
 - Update via `git pull` and rerun playbooks as needed.
+- **Plugin Installation:** Plugins installed via this setup remain deactivated. Activate them manually via the WordPress admin panel or extend the playbook to enable specific plugins if needed.
 
 ---
 

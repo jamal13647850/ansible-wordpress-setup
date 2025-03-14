@@ -104,6 +104,43 @@
       args:
         chdir: "/var/www/{{ domain }}/html"
 
+    - name: Install WordPress plugins from WordPress.org
+      shell: wp plugin install {{ item.slug }} --allow-root
+      args:
+        chdir: "/var/www/{{ domain }}/html"
+      loop: "{{ plugins | selectattr('source', 'equalto', 'wordpress') | list }}"
+      when: install_plugins | bool
+
+    - name: Copy local plugin ZIP files to server
+      copy:
+        src: "{{ item.path }}"
+        dest: "/tmp/{{ item.path | basename }}"
+        mode: '0644'
+      loop: "{{ plugins | selectattr('source', 'equalto', 'local') | list }}"
+      when: install_plugins | bool
+
+    - name: Install WordPress plugins from local ZIP files
+      shell: wp plugin install /tmp/{{ item.path | basename }} --allow-root
+      args:
+        chdir: "/var/www/{{ domain }}/html"
+      loop: "{{ plugins | selectattr('source', 'equalto', 'local') | list }}"
+      when: install_plugins | bool
+
+    - name: Clean up temporary ZIP files
+      file:
+        path: "/tmp/{{ item.path | basename }}"
+        state: absent
+      loop: "{{ plugins | selectattr('source', 'equalto', 'local') | list }}"
+      when: install_plugins | bool
+
+    - name: Ensure all installed plugins are deactivated
+      shell: wp plugin deactivate {{ item.slug | default((item.path | basename | splitext)[0]) }} --allow-root
+      args:
+        chdir: "/var/www/{{ domain }}/html"
+      loop: "{{ plugins }}"
+      when: install_plugins | bool
+      ignore_errors: yes  # In case plugin wasn't activated
+
     - name: Set up system cron for wp-cron.php when DISABLE_WP_CRON is true
       cron:
         name: "Run wp-cron.php for {{ domain }}"
