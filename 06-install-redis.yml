@@ -1,0 +1,39 @@
+- hosts: all
+  become: true
+  tasks:
+    - name: Install Redis server
+      apt:
+        name: redis-server
+        state: present
+        update_cache: yes
+      when: install_redis | bool
+
+    - name: Configure Redis bind address
+      lineinfile:
+        path: /etc/redis/redis.conf
+        regexp: '^bind\s+.*'
+        line: 'bind 127.0.0.1 ::1'
+      when: install_redis | bool
+      notify: Restart Redis
+
+    - name: Set Redis password
+      lineinfile:
+        path: /etc/redis/redis.conf
+        regexp: '^#?\s*requirepass\s+.*'
+        line: 'requirepass {{ wp_redis_password }}'
+      when: install_redis | bool
+      notify: Restart Redis
+
+    - name: Start and enable Redis service
+      systemd:
+        name: redis-server
+        state: started
+        enabled: yes
+      when: install_redis | bool
+
+  handlers:
+    - name: Restart Redis
+      service:
+        name: redis-server
+        state: restarted
+      when: install_redis | bool

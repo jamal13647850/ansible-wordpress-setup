@@ -46,7 +46,6 @@ if [[ "$RESTRICT_IP" =~ ^[Yy]$ ]]; then
     echo "Enter allowed IP addresses (one per line). Press Ctrl+D or Ctrl+C when done:"
     ALLOWED_IPS=""
     while IFS= read -r ip; do
-        # ساده‌سازی: حذف فاصله‌ها و اطمینان از اینکه خط خالی نباشه
         ip=$(echo "$ip" | xargs)
         if [[ -n "$ip" ]]; then
             ALLOWED_IPS="$ALLOWED_IPS  - \"$ip\"\n"
@@ -57,8 +56,6 @@ else
     ALLOWED_IPS=""
 fi
 
-
-
 # Basic Auth configuration
 echo -e "\nBasic Authentication Configuration"
 echo "----------------------------------"
@@ -67,11 +64,59 @@ if [[ "$ENABLE_AUTH" =~ ^[Yy]$ ]]; then
     ENABLE_BASIC_AUTH="true"
     read -p "Enter username for Basic Authentication: " BASIC_AUTH_USER
     read -s -p "Enter password for Basic Authentication: " BASIC_AUTH_PASSWORD
-    echo ""  # خط جدید بعد از وارد کردن رمز
+    echo ""
 else
     ENABLE_BASIC_AUTH="false"
     BASIC_AUTH_USER=""
     BASIC_AUTH_PASSWORD=""
+fi
+
+# WordPress configuration options
+echo -e "\nWordPress Configuration Options"
+echo "--------------------------------"
+read -p "Enter WP_MEMORY_LIMIT (e.g., 64M, default: 64M): " WP_MEMORY_LIMIT
+WP_MEMORY_LIMIT=${WP_MEMORY_LIMIT:-"64M"}
+
+read -p "Enter WP_MAX_MEMORY_LIMIT (e.g., 256M, default: 256M): " WP_MAX_MEMORY_LIMIT
+WP_MAX_MEMORY_LIMIT=${WP_MAX_MEMORY_LIMIT:-"256M"}
+
+read -p "Force SSL login? (true/false, default: false): " FORCE_SSL_LOGIN
+FORCE_SSL_LOGIN=${FORCE_SSL_LOGIN:-"false"}
+
+read -p "Force SSL admin? (true/false, default: false): " FORCE_SSL_ADMIN
+FORCE_SSL_ADMIN=${FORCE_SSL_ADMIN:-"false"}
+
+read -p "Disallow file editing in admin? (true/false, default: true): " DISALLOW_FILE_EDIT
+DISALLOW_FILE_EDIT=${DISALLOW_FILE_EDIT:-"true"}
+
+read -p "Set FS_METHOD to 'direct'? (true/false, default: true): " FS_METHOD_DIRECT
+FS_METHOD_DIRECT=${FS_METHOD_DIRECT:-"true"}
+if [[ "$FS_METHOD_DIRECT" =~ ^[Tt]$ ]]; then
+    FS_METHOD="direct"
+else
+    FS_METHOD=""
+fi
+
+read -p "Disable WP-Cron and use system cron instead? (true/false, default: false): " DISABLE_WP_CRON
+DISABLE_WP_CRON=${DISABLE_WP_CRON:-"false"}
+
+# Redis configuration (optional)
+echo -e "\nRedis Configuration (Optional)"
+echo "------------------------------"
+read -p "Would you like to install and configure Redis for WordPress caching? (y/n): " INSTALL_REDIS
+if [[ "$INSTALL_REDIS" =~ ^[Yy]$ ]]; then
+    INSTALL_REDIS="true"
+    WP_REDIS_HOST="127.0.0.1"  # Default localhost
+    WP_REDIS_PORT="6379"       # Default Redis port
+    WP_REDIS_PASSWORD=$(generate_password)  # Generate a secure password
+    read -p "Enter Redis database number (0-15, default: 0): " WP_REDIS_DATABASE
+    WP_REDIS_DATABASE=${WP_REDIS_DATABASE:-"0"}
+else
+    INSTALL_REDIS="false"
+    WP_REDIS_HOST=""
+    WP_REDIS_PORT=""
+    WP_REDIS_PASSWORD=""
+    WP_REDIS_DATABASE=""
 fi
 
 # Create or overwrite the all.yml file
@@ -99,27 +144,26 @@ $ALLOWED_IPS
 enable_basic_auth: $ENABLE_BASIC_AUTH
 basic_auth_user: "$BASIC_AUTH_USER"
 basic_auth_password: "$BASIC_AUTH_PASSWORD"
+# WordPress configuration settings
+wp_memory_limit: "$WP_MEMORY_LIMIT"
+wp_max_memory_limit: "$WP_MAX_MEMORY_LIMIT"
+force_ssl_login: $FORCE_SSL_LOGIN
+force_ssl_admin: $FORCE_SSL_ADMIN
+disallow_file_edit: $DISALLOW_FILE_EDIT
+fs_method: "$FS_METHOD"
+disable_wp_cron: $DISABLE_WP_CRON
+# Redis configuration settings
+install_redis: $INSTALL_REDIS
+wp_redis_host: "$WP_REDIS_HOST"
+wp_redis_port: "$WP_REDIS_PORT"
+wp_redis_password: "$WP_REDIS_PASSWORD"
+wp_redis_database: "$WP_REDIS_DATABASE"
 EOF
-
-
-
 
 # Secure the file permissions
 chmod 600 "$OUTPUT_FILE"
 
-
-
 # Display the generated values
-if [[ "$ENABLE_BASIC_AUTH" == "true" ]]; then
-    echo "Basic Authentication Enabled: Yes"
-    echo "Basic Auth Username: $BASIC_AUTH_USER"
-    echo "Basic Auth Password: [hidden for security]"
-else
-    echo "Basic Authentication Enabled: No"
-fi
-
-
-
 echo -e "\nConfiguration file '$OUTPUT_FILE' has been created with the following values:"
 echo "------------------------------------------------"
 echo "MySQL Root Password: $MYSQL_ROOT_PASSWORD"
@@ -134,6 +178,29 @@ if [[ "$RESTRICT_IP_ACCESS" == "true" ]]; then
     echo "$ALLOWED_IPS" | sed 's/  - /  - /g'
 else
     echo "IP Restriction Enabled: No"
+fi
+if [[ "$ENABLE_BASIC_AUTH" == "true" ]]; then
+    echo "Basic Authentication Enabled: Yes"
+    echo "Basic Auth Username: $BASIC_AUTH_USER"
+    echo "Basic Auth Password: [hidden for security]"
+else
+    echo "Basic Authentication Enabled: No"
+fi
+echo "WP_MEMORY_LIMIT: $WP_MEMORY_LIMIT"
+echo "WP_MAX_MEMORY_LIMIT: $WP_MAX_MEMORY_LIMIT"
+echo "FORCE_SSL_LOGIN: $FORCE_SSL_LOGIN"
+echo "FORCE_SSL_ADMIN: $FORCE_SSL_ADMIN"
+echo "DISALLOW_FILE_EDIT: $DISALLOW_FILE_EDIT"
+echo "FS_METHOD: $FS_METHOD"
+echo "DISABLE_WP_CRON: $DISABLE_WP_CRON"
+if [[ "$INSTALL_REDIS" == "true" ]]; then
+    echo "Redis Installation Enabled: Yes"
+    echo "WP_REDIS_HOST: $WP_REDIS_HOST"
+    echo "WP_REDIS_PORT: $WP_REDIS_PORT"
+    echo "WP_REDIS_PASSWORD: $WP_REDIS_PASSWORD"
+    echo "WP_REDIS_DATABASE: $WP_REDIS_DATABASE"
+else
+    echo "Redis Installation Enabled: No"
 fi
 echo "------------------------------------------------"
 echo "Please save these values in a secure place!"

@@ -16,6 +16,10 @@ This repository provides a set of Ansible playbooks to automate the deployment o
 - **Flexibility:** Uses variables to avoid hardcoding, with a script to generate secure passwords and settings.
 - **Server Tools:** Installs `bashtop`, `tmux`, `wget`, `curl`, `nano`, `tar`, `clamav`, `rkhunter`, and `rsync` for enhanced server management.
 - **Cache Management:** Adds a custom alias to clear Nginx cache (e.g., `cleancachemysitecom`).
+- **Custom WordPress Configurations:** Allows setting `WP_MEMORY_LIMIT`, `WP_MAX_MEMORY_LIMIT`, `FORCE_SSL_LOGIN`, `FORCE_SSL_ADMIN`, `DISALLOW_FILE_EDIT`, `FS_METHOD`, and `DISABLE_WP_CRON` via `generate_config.sh`.
+- **System Cron for WP-Cron:** Optionally disables WordPress's built-in cron and sets up a system cron job to run `wp-cron.php` every minute.
+- **Optional Redis Integration:** Installs and configures Redis for caching, with customizable settings (`WP_REDIS_HOST`, `WP_REDIS_PORT`, `WP_REDIS_PASSWORD`, `WP_REDIS_DATABASE`) in `wp-config.php`.
+
 
 ---
 
@@ -89,6 +93,8 @@ chmod +x generate_config.sh
 ```
 
 - **Prompts:** The script will ask for:
+  - **Redis (Optional):** Option to install Redis, with prompts for database number and auto-generated secure password.
+  - **WordPress Configurations:** Options to set memory limits, SSL enforcement, file editing restrictions, filesystem method, and cron behavior.
   - Domain name (e.g., `mysite.com`)
   - WordPress admin username (e.g., `admin`)
   - WordPress admin email (e.g., `admin@mysite.com`)
@@ -275,6 +281,8 @@ ansible-playbook -i inventory \
   04-install-wordpress.yml \
   05-obtain-ssl.yml \
   --ask-become-pass
+
+  ansible-playbook -i inventory 06-install-redis.yml --ask-become-pass
 ```
 - Use `--ask-become-pass` to enter the sudo password if required.
 - If encrypted, add `--ask-vault-pass`:
@@ -310,6 +318,7 @@ ansible-playbook -i inventory \
 4. **`03-install-php-composer-wpcli.yml`**: Installs PHP, Composer, WP-CLI.
 5. **`04-install-wordpress.yml`**: Configures Nginx, installs WordPress.
 6. **`05-obtain-ssl.yml`**: Obtains SSL certificate.
+7. **`06-install-redis.yml`**: Installs and configures Redis with secure settings if enabled.
 
 ---
 

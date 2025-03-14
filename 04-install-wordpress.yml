@@ -13,21 +13,19 @@
         path: /etc/nginx/sites-available
         state: directory
         mode: '0755'
-      become: true
 
     - name: Ensure sites-enabled directory exists
       ansible.builtin.file:
         path: /etc/nginx/sites-enabled
         state: directory
         mode: '0755'
-      become: true
 
     - name: Configure Nginx for WordPress
       template:
         src: templates/nginx.conf.j2
         dest: /etc/nginx/sites-available/{{ domain }}
         mode: '0644'
-      become: true
+      notify: Restart Nginx
 
     - name: Enable Nginx site
       ansible.builtin.file:
@@ -35,9 +33,7 @@
         dest: /etc/nginx/sites-enabled/{{ domain }}
         state: link
         force: yes
-      become: true
       notify: Restart Nginx
-
 
     - name: Add user to www-data group  
       user:  
@@ -81,11 +77,47 @@
         chdir: "/var/www/{{ domain }}/html"  
       become_user: "{{ linux_username }}"  
 
+    - name: Add custom WordPress configurations to wp-config.php
+      blockinfile:
+        path: "/var/www/{{ domain }}/html/wp-config.php"
+        insertbefore: "/* That's all, stop editing! Happy publishing. */"
+        block: |
+          define('WP_MEMORY_LIMIT', '{{ wp_memory_limit }}');
+          define('WP_MAX_MEMORY_LIMIT', '{{ wp_max_memory_limit }}');
+          define('FORCE_SSL_LOGIN', {{ force_ssl_login }});
+          define('FORCE_SSL_ADMIN', {{ force_ssl_admin }});
+          define('DISALLOW_FILE_EDIT', {{ disallow_file_edit }});
+          {% if fs_method %}
+          define('FS_METHOD', '{{ fs_method }}');
+          {% endif %}
+          define('DISABLE_WP_CRON', {{ disable_wp_cron }});
+          {% if install_redis %}
+          define('WP_REDIS_HOST', '{{ wp_redis_host }}');
+          define('WP_REDIS_PORT', {{ wp_redis_port }});
+          define('WP_REDIS_PASSWORD', '{{ wp_redis_password }}');
+          define('WP_REDIS_DATABASE', {{ wp_redis_database }});
+          {% endif %}
+        marker: "// {mark} ANSIBLE MANAGED BLOCK - WordPress Custom Configs"
+
     - name: Install WordPress
       ansible.builtin.shell: sudo -u www-data wp core install --url='http://{{ domain }}' --title='{{ wordpress_title }}' --admin_user='{{ wordpress_admin_user }}' --admin_password='{{ wordpress_admin_password }}' --admin_email='{{ wordpress_admin_email }}'
       args:
-        chdir: /var/www/{{ domain }}/html
-      become: true 
+        chdir: "/var/www/{{ domain }}/html"
+
+    - name: Set up system cron for wp-cron.php when DISABLE_WP_CRON is true
+      cron:
+        name: "Run wp-cron.php for {{ domain }}"
+        minute: "*/1"
+        job: "/usr/bin/php -q /var/www/{{ domain }}/html/wp-cron.php"
+        user: www-data
+        state: present
+      when: disable_wp_cron | bool
+
+    - name: Remove default wp-cron if DISABLE_WP_CRON is false
+      cron:
+        name: "Run wp-cron.php for {{ domain }}"
+        state: absent
+      when: not disable_wp_cron | bool
 
     - name: Set correct permissions for directories  
       file:  
@@ -103,12 +135,8 @@
         recurse: yes  
       register: wp_files  
 
-
-
-
   handlers:
-  - name: Restart Nginx
-    ansible.builtin.service:
-      name: nginx
-      state: restarted
-    become: true
+    - name: Restart Nginx
+      ansible.builtin.service:
+        name: nginx
+        state: restarted
