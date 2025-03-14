@@ -1,0 +1,24 @@
+- hosts: all
+  become: true
+  tasks:
+    - name: Create backup directory
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: '0700'
+        owner: "{{ linux_username }}"
+        group: "{{ linux_username }}"
+      when: enable_backups | bool
+
+    - name: Set up backup cron job
+      cron:
+        name: "Backup {{ domain }}"
+        minute: "{{ backup_freq.split()[0] }}"
+        hour: "{{ backup_freq.split()[1] }}"
+        day: "{{ backup_freq.split()[2] }}"
+        month: "{{ backup_freq.split()[3] }}"
+        weekday: "{{ backup_freq.split()[4] }}"
+        job: "mysqldump -u {{ mysql_db_user }} -p'{{ mysql_db_password }}' {{ mysql_db_name }} > {{ backup_dir }}/db-$(date +\\%Y\\%m\\%d).sql && tar -czf {{ backup_dir }}/files-$(date +\\%Y\\%m\\%d).tar.gz /var/www/{{ domain }}/html"
+        user: "{{ linux_username }}"
+        state: present
+      when: enable_backups | bool

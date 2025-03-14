@@ -1,0 +1,14 @@
+- hosts: all
+  become: true
+  tasks:
+    - name: Install ImageMagick
+      apt:
+        name: imagemagick
+        state: present
+      when: enable_image_optimization | bool
+
+    - name: Install Smush plugin
+      shell: wp plugin install wp-smushit --allow-root
+      args:
+        chdir: "/var/www/{{ domain }}/html"
+      when: enable_image_optimization | bool

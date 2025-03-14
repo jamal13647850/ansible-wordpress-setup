@@ -1,0 +1,12 @@
+- hosts: all
+  become: true
+  tasks:
+    - name: Backup database before installation
+      shell: mysqldump -u {{ mysql_db_user }} -p'{{ mysql_db_password }}' {{ mysql_db_name }} > /var/backups/{{ domain }}-pre-install.sql
+      when: enable_rollback | bool
+      ignore_errors: true
+
+    - name: Backup files before installation
+      shell: tar -czf /var/backups/{{ domain }}-pre-install.tar.gz /var/www/{{ domain }}/html
+      when: enable_rollback | bool
+      ignore_errors: true

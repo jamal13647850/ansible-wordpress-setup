@@ -1,0 +1,18 @@
+- hosts: all
+  become: true
+  tasks:
+    - name: Install CDN Enabler plugin
+      shell: wp plugin install cdn-enabler --allow-root
+      args:
+        chdir: "/var/www/{{ domain }}/html"
+      when: enable_cdn | bool or enable_local_cdn | bool
+
+    - name: Configure Cloudflare CDN (placeholder)
+      debug:
+        msg: "Configure {{ cdn_provider }} with API key {{ cdn_api_key }} and account {{ cdn_account }}"
+      when: enable_cdn | bool and cdn_provider == "cloudflare"
+
+    - name: Configure ArvanCloud CDN (placeholder)
+      debug:
+        msg: "Configure {{ local_cdn_provider }} with API key {{ local_cdn_api_key }}"
+      when: enable_local_cdn | bool and local_cdn_provider == "arvancloud"

@@ -104,6 +104,22 @@
       args:
         creates: "/etc/nginx/sites-available/{{ domain }}helper/arvancloud.conf"
 
+    - name: Create Nginx logs directory
+      file:
+        path: "/var/www/{{ domain }}/logs"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0775'
+
+    - name: Create Nginx cache directory
+      file:
+        path: "/etc/nginx/cache/{{ domain }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'    
+
   handlers:
     - name: Restart Nginx
       ansible.builtin.service:

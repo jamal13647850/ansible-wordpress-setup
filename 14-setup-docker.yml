@@ -1,0 +1,26 @@
+- hosts: all
+  become: true
+  tasks:
+    - name: Install Docker
+      apt:
+        name: docker.io
+        state: present
+      when: enable_docker | bool
+
+    - name: Install Docker Compose
+      apt:
+        name: docker-compose
+        state: present
+      when: enable_docker | bool
+
+    - name: Create Docker Compose file
+      template:
+        src: templates/docker-compose.yml.j2
+        dest: "/var/www/{{ domain }}/docker-compose.yml"
+      when: enable_docker | bool
+
+    - name: Start Docker containers
+      shell: docker-compose up -d
+      args:
+        chdir: "/var/www/{{ domain }}"
+      when: enable_docker | bool

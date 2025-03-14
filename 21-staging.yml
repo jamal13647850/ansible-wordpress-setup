@@ -1,0 +1,14 @@
+- hosts: all
+  become: true
+  tasks:
+    - name: Create staging directory
+      file:
+        path: "/var/www/{{ staging_subdomain }}.{{ domain }}/html"
+        state: directory
+        owner: www-data
+        group: www-data
+      when: enable_staging | bool
+
+    - name: Copy main site to staging
+      shell: cp -r /var/www/{{ domain }}/html/* /var/www/{{ staging_subdomain }}.{{ domain }}/html/
+      when: enable_staging | bool

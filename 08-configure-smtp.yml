@@ -1,0 +1,14 @@
+- hosts: all
+  become: true
+  tasks:
+    - name: Install WP Mail SMTP plugin
+      shell: wp plugin install wp-mail-smtp --allow-root
+      args:
+        chdir: "/var/www/{{ domain }}/html"
+      when: enable_smtp | bool
+
+    - name: Configure WP Mail SMTP
+      shell: wp option update wpmailsmtp '{"mail":{"from_email":"{{ wordpress_admin_email }}","from_name":"{{ wordpress_title }}","mailer":"smtp","smtp":{"host":"{{ smtp_host }}","port":"{{ smtp_port }}","username":"{{ smtp_username }}","password":"{{ smtp_password }}","encryption":"tls","auth":true}}' --format=json --allow-root
+      args:
+        chdir: "/var/www/{{ domain }}/html"
+      when: enable_smtp | bool

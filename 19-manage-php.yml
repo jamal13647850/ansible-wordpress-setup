@@ -1,0 +1,9 @@
+- hosts: all
+  become: true
+  tasks:
+    - name: Install additional PHP versions
+      apt:
+        name: "php{{ item }}"
+        state: present
+      loop: "{{ php_additional_versions.split(',') }}"
+      when: enable_php_versions | bool

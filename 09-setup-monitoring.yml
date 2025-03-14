@@ -1,0 +1,19 @@
+- hosts: all
+  become: true
+  tasks:
+    - name: Install monitoring tools
+      apt:
+        name:
+          - htop
+          - logrotate
+        state: present
+      when: enable_monitoring | bool
+
+    - name: Ensure log directory exists
+      file:
+        path: "/var/www/{{ domain }}/logs"
+        state: directory
+        mode: '0775'
+        owner: www-data
+        group: www-data
+      when: enable_monitoring | bool

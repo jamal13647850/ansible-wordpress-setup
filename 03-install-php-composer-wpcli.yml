@@ -60,12 +60,25 @@
         - { regexp: '^max_input_vars =', line: 'max_input_vars = 3000' }  
         - { regexp: '^max_input_time =', line: 'max_input_time = 1000' }  
 
+    - name: Configure PHP OPcache  
+      lineinfile:  
+        path: "/etc/php/{{ php_version }}/fpm/conf.d/10-opcache.ini"  
+        regexp: "{{ item.regexp }}"  
+        line: "{{ item.line }}"  
+      loop:  
+        - { regexp: '^opcache.enable=', line: 'opcache.enable=1' }  
+        - { regexp: '^opcache.memory_consumption=', line: 'opcache.memory_consumption={{ opcache_memory }}' }  
+        - { regexp: '^opcache.interned_strings_buffer=', line: 'opcache.interned_strings_buffer=8' }  
+        - { regexp: '^opcache.max_accelerated_files=', line: 'opcache.max_accelerated_files=10000' }  
+        - { regexp: '^opcache.revalidate_freq=', line: 'opcache.revalidate_freq=2' }  
+      when: enable_php_opcache | bool  
+      notify: Restart PHP-FPM  
+
     - name: Install Composer  
       ansible.builtin.shell: |  
         curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer  
       args:  
         creates: /usr/local/bin/composer  
- 
 
     - name: Install WP-CLI  
       get_url:  
@@ -74,3 +87,9 @@
         mode: '0755'  
         owner: root  
         group: root  
+
+  handlers:  
+    - name: Restart PHP-FPM  
+      service:  
+        name: "php{{ php_version }}-fpm"  
+        state: restarted  

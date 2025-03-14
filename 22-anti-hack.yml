@@ -1,0 +1,11 @@
+- hosts: all
+  become: true
+  tasks:
+    - name: Remove unnecessary files
+      file:
+        path: "/var/www/{{ domain }}/html/{{ item }}"
+        state: absent
+      loop:
+        - readme.html
+        - license.txt
+      when: enable_anti_hack | bool

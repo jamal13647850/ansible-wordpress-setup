@@ -1,0 +1,15 @@
+- hosts: all
+  become: true
+  tasks:
+    - name: Install Memcached
+      apt:
+        name: memcached
+        state: present
+      when: enable_advanced_caching | bool and cache_type == "memcached"
+
+    - name: Configure Memcached in wp-config.php
+      lineinfile:
+        path: "/var/www/{{ domain }}/html/wp-config.php"
+        insertbefore: "/* That's all, stop editing! Happy publishing. */"
+        line: "define('WP_CACHE', true);"
+      when: enable_advanced_caching | bool and cache_type == "memcached"

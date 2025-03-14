@@ -1,0 +1,20 @@
+- hosts: all
+  become: true
+  tasks:
+    - name: Install Wordfence plugin
+      shell: wp plugin install wordfence --allow-root
+      args:
+        chdir: "/var/www/{{ domain }}/html"
+      when: enable_advanced_security | bool
+
+    - name: Configure CSF for auto-blocking
+      lineinfile:
+        path: /etc/csf/csf.conf
+        regexp: '^LF_TRIGGER ='
+        line: 'LF_TRIGGER = "5"'
+      when: enable_advanced_security | bool
+      notify: Restart CSF
+
+  handlers:
+    - name: Restart CSF
+      shell: csf -r

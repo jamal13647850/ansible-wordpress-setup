@@ -1,0 +1,8 @@
+- hosts: all
+  become: true
+  tasks:
+    - name: Install ModSecurity
+      apt:
+        name: libapache2-mod-security2
+        state: present
+      when: enable_waf | bool

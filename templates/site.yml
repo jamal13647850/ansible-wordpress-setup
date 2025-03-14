@@ -1,0 +1,8 @@
+- import_playbook: 00-update-upgrade.yml
+- import_playbook: 01-install-mysql.yml
+- import_playbook: 02-install-nginx.yml
+- import_playbook: 03-install-php-composer-wpcli.yml
+- import_playbook: 04-install-wordpress.yml
+- import_playbook: 05-obtain-ssl.yml
+- import_playbook: 06-install-redis.yml
+  when: "{{ install_redis | default(false) }}"

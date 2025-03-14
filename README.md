@@ -1,71 +1,97 @@
 # Ansible WordPress Deployment with Optimized Nginx Configuration
 
-This repository provides a set of Ansible playbooks to automate the deployment of a WordPress site on an Ubuntu server. It includes an optimized Nginx configuration tailored for WordPress, with support for Cloudflare, ArvanCloud, FastCGI caching, security enhancements, and performance optimizations. A Bash script (`generate_config.sh`) simplifies configuration with options for IP restrictions and Basic Authentication, and additional tools are installed for server management.
+This repository provides a comprehensive set of Ansible playbooks to automate the deployment of a secure, optimized WordPress site on an Ubuntu server. It includes an advanced Nginx configuration tailored for WordPress, with support for Cloudflare and ArvanCloud CDNs, FastCGI caching, security enhancements, and performance optimizations. A Bash script (`generate_config.sh`) simplifies configuration with interactive prompts, generating secure credentials and settings, while additional server management tools are installed for convenience.
 
 ---
 
 ## **Features**
-- **Automated Setup:** Installs and configures MySQL, Nginx, PHP, Composer, WP-CLI, WordPress, and SSL certificates.
-- **Optimized Nginx:** Includes configurations for caching, security headers, Gzip, keepalive, and WordPress-specific rules.
-- **CDN Support:** Integrates with Cloudflare and ArvanCloud by syncing IP lists and setting real IP headers.
-- **Security:**
-  - Implements CSF firewall rules, blocks malicious User-Agents, and restricts access to sensitive files.
-  - Supports IP-based access restrictions for WordPress recovery and file manager (configurable via `generate_config.sh`).
-  - Optional Basic Authentication (HTTP Basic Auth) for additional access control, with `.htpasswd` file generation via Ansible.
-  - Includes antivirus (`clamav`) and rootkit detection (`rkhunter`).
-- **Flexibility:** Uses variables to avoid hardcoding, with a script to generate secure passwords and settings.
-- **Server Tools:** Installs `bashtop`, `tmux`, `wget`, `curl`, `nano`, `tar`, `clamav`, `rkhunter`, and `rsync` for enhanced server management.
-- **Cache Management:** Adds a custom alias to clear Nginx cache (e.g., `cleancachemysitecom`).
-- **Custom WordPress Configurations:** Allows setting `WP_MEMORY_LIMIT`, `WP_MAX_MEMORY_LIMIT`, `FORCE_SSL_LOGIN`, `FORCE_SSL_ADMIN`, `DISALLOW_FILE_EDIT`, `FS_METHOD`, and `DISABLE_WP_CRON` via `generate_config.sh`.
-- **System Cron for WP-Cron:** Optionally disables WordPress's built-in cron and sets up a system cron job to run `wp-cron.php` every minute.
-- **Optional Redis Integration:** Installs and configures Redis for caching, with customizable settings (`WP_REDIS_HOST`, `WP_REDIS_PORT`, `WP_REDIS_PASSWORD`, `WP_REDIS_DATABASE`) in `wp-config.php`.
-- **Custom Plugin Installation:** Installs an unlimited number of WordPress plugins from the WordPress.org repository (via slug) or local ZIP files, with all plugins remaining deactivated after installation.
-
+- **Automated Deployment:** Installs and configures MySQL, Nginx, PHP, Composer, WP-CLI, WordPress, Redis (optional), and SSL certificates via Certbot.
+- **Optimized Nginx Configuration:**
+  - FastCGI caching with a custom alias (e.g., `cleancachemysitecom`) for easy cache management.
+  - Security headers, Gzip compression, keepalive settings, and WordPress-specific rules.
+  - IP restriction and Basic Authentication support for sensitive paths (e.g., `/fm/` and recovery URLs).
+- **CDN Integration:** Syncs IP lists for Cloudflare and ArvanCloud, sets real IP headers, and whitelists IPs in CSF firewall.
+- **Security Enhancements:**
+  - CSF firewall with CDN IP whitelisting and auto-blocking.
+  - Blocks malicious User-Agents via iThemes Security rules.
+  - Installs `clamav` (antivirus) and `rkhunter` (rootkit detection).
+  - Optional IP restrictions and HTTP Basic Authentication configurable via `generate_config.sh`.
+- **Performance Features:**
+  - Optional Redis caching with secure configuration in `wp-config.php`.
+  - PHP OPcache enabled by default with optimized settings.
+  - Support for multiple domains and custom redirects.
+- **WordPress Customization:**
+  - Installs unlimited plugins from WordPress.org (via slugs) or local ZIP files (deactivated by default).
+  - Configurable settings: `WP_MEMORY_LIMIT`, `WP_MAX_MEMORY_LIMIT`, `FORCE_SSL_LOGIN`, `FORCE_SSL_ADMIN`, `DISALLOW_FILE_EDIT`, `FS_METHOD`, and `DISABLE_WP_CRON`.
+  - Optional system cron for `wp-cron.php` instead of WordPress’s built-in cron.
+- **Server Management Tools:** Installs `bashtop`, `tmux`, `wget`, `curl`, `nano`, `tar`, `clamav`, `rkhunter`, and `rsync`.
+- **Flexibility:** Uses Ansible variables for customization, with a script to generate secure passwords and settings.
 
 ---
 
 ## **Prerequisites**
-Before using this project, ensure you have the following:
-1. **Ansible Installed:** Version 2.9 or higher on your control machine.
-   - Install with: `pip install ansible` or `sudo apt install ansible`.
-2. **Ubuntu Server:** A target server running Ubuntu 20.04 or 22.04.
-3. **SSH Access:** Root or sudo access to the target server with SSH key-based authentication.
-4. **Domain Name:** A registered domain pointing to your server's IP address.
-5. **OpenSSL:** Required for the `generate_config.sh` script to generate secure passwords.
-   - Install with: `sudo apt install openssl`.
-6. **Python passlib:** Required for generating `.htpasswd` files with Ansible.
-   - Install with: `pip install passlib`.
+Before using this project, ensure the following are met:
+
+1. **Ansible:** Version 2.9+ installed on the control machine.
+   - Install: `pip install ansible` or `sudo apt install ansible`.
+2. **Ubuntu Server:** Target server running Ubuntu 20.04 or 22.04.
+3. **SSH Access:** Root or sudo privileges with SSH key-based authentication.
+4. **Domain Name:** A registered domain pointing to the server’s IP.
+5. **Dependencies on Control Machine:**
+   - OpenSSL: `sudo apt install openssl` (for `generate_config.sh`).
+   - Python `passlib`: `pip install passlib` (for `.htpasswd` generation).
+6. **Dialog (Optional):** For interactive `generate_config.sh` prompts.
+   - Install: `sudo apt install dialog`.
 
 ---
 
 ## **Directory Structure**
 ```
 project/
+├── examplehelper/
+│   ├── arvancloud-ip-sync.sh  # Syncs ArvanCloud IPs
+│   └── cloudflare-ip-sync.sh  # Syncs Cloudflare IPs
 ├── group_vars/
-│   └── all.yml             # Variables file (generated by generate_config.sh)
+│   └── all.yml                # Configuration variables (generated)
 ├── templates/
-│   ├── arvancloud-ip-sync.sh.j2  # ArvanCloud IP sync script
-│   ├── cache.j2           # Caching rules
-│   ├── cloudflare-ip-sync.sh.j2  # Cloudflare IP sync script
-│   ├── cloudflare.j2      # Cloudflare IP list
-│   ├── filemanager.j2     # File manager settings
-│   ├── general.j2         # General Nginx rules
-│   ├── gzip.j2            # Gzip compression settings
-│   ├── keepalive.j2       # Keepalive settings
-│   ├── nginx.conf.j2      # Nginx configuration template
-│   ├── redirects.j2       # URL redirects
-│   ├── securityheaders.j2 # Security headers
-│   ├── wordpress.j2       # WordPress-specific rules
+│   ├── cache.j2              # Caching rules
+│   ├── cloudflare.j2         # Cloudflare IP settings
+│   ├── docker-compose.yml.j2 # Docker Compose template
+│   ├── filemanager.j2        # File manager access control
+│   ├── general.j2           # General Nginx rules
+│   ├── gzip.j2              # Gzip compression
+│   ├── keepalive.j2         # Keepalive settings
+│   ├── nginx.conf.j2        # Main Nginx configuration
+│   ├── redirects.j2         # URL redirects
+│   ├── securityheaders.j2   # Security headers
+│   ├── wordpress.j2         # WordPress-specific rules
 ├── .gitignore
-├── 00-update-upgrade.yml   # Updates system and installs tools
-├── 01-install-mysql.yml    # Installs MySQL
-├── 02-install-nginx.yml    # Installs Nginx and helper files
-├── 03-install-php-composer-wpcli.yml # Installs PHP, Composer, and WP-CLI
-├── 04-install-wordpress.yml # Installs and configures WordPress
-├── 05-obtain-ssl.yml       # Obtains SSL certificate with Certbot
-├── generate_config.sh      # Script to generate group_vars/all.yml
-├── LICENSE
-└── README.md
+├── 00-update-upgrade.yml     # System updates and tools
+├── 01-install-mysql.yml      # MySQL installation
+├── 02-install-nginx.yml      # Nginx and CSF setup
+├── 03-install-php-composer-wpcli.yml # PHP, Composer, WP-CLI
+├── 04-install-wordpress.yml  # WordPress installation
+├── 05-obtain-ssl.yml         # SSL via Certbot
+├── 06-install-redis.yml      # Redis installation (optional)
+├── 07-setup-backups.yml      # Backup configuration
+├── 08-configure-smtp.yml     # SMTP setup
+├── 09-setup-monitoring.yml   # Monitoring tools
+├── 10-optimize-images.yml    # Image optimization
+├── 11-advanced-security.yml  # Advanced security (e.g., Wordfence)
+├── 12-migrate-wordpress.yml  # Migration support
+├── 13-setup-cdn.yml          # CDN configuration
+├── 14-setup-docker.yml       # Docker setup
+├── 15-generate-docs.yml      # Documentation generation
+├── 16-setup-rollback.yml     # Rollback setup
+├── 17-advanced-caching.yml   # Advanced caching (e.g., Memcached)
+├── 18-setup-waf.yml          # Web Application Firewall
+├── 19-manage-php.yml         # PHP version management
+├── 20-multi-domain.yml       # Multi-domain support
+├── 21-staging.yml            # Staging environment
+├── 22-anti-hack.yml          # Anti-hack measures
+├── generate_config.sh        # Configuration generator
+├── LICENSE                   # MIT License
+└── README.md                 # This file
 ```
 
 ---
@@ -73,171 +99,98 @@ project/
 ## **Installation and Usage**
 
 ### **Step 1: Clone the Repository**
-Clone this repository to your control machine:
 ```bash
 git clone https://github.com/jamal13647850/ansible-wordpress-setup.git
 cd ansible-wordpress-setup
 ```
 
 ### **Step 2: Install Dependencies**
-Ensure required tools are installed on your control machine:
+On the control machine:
 ```bash
 pip install ansible passlib
-sudo apt install openssl
+sudo apt install openssl dialog
 ```
 
 ### **Step 3: Generate Configuration**
-Run the `generate_config.sh` script to create or update `group_vars/all.yml` with secure, auto-generated values:
+Run the configuration script to create `group_vars/all.yml`:
 ```bash
 chmod +x generate_config.sh
 ./generate_config.sh
 ```
-
-- **Prompts:** The script will ask for:
-  - **WordPress Plugins (Optional):** Option to install plugins by entering slugs (e.g., `redis-cache`) for WordPress.org plugins or full paths to local ZIP files (e.g., `/path/to/plugin.zip`).
-  - **Redis (Optional):** Option to install Redis, with prompts for database number and auto-generated secure password.
-  - **WordPress Configurations:** Options to set memory limits, SSL enforcement, file editing restrictions, filesystem method, and cron behavior.
+- **Prompts Include:**
   - Domain name (e.g., `mysite.com`)
-  - WordPress admin username (e.g., `admin`)
-  - WordPress admin email (e.g., `admin@mysite.com`)
-  - WordPress site title (e.g., `My Site`)
-  - WordPress locale (e.g., `en_US` or `fa_IR`)
-  - SSL email for Certbot (e.g., `your@email.com`)
+  - WordPress admin details (username, email, site title, locale)
+  - SSL email (for Certbot)
   - PHP version (e.g., `8.3`)
   - Linux username (e.g., `ubuntu`)
-  - **IP Restriction:** Whether to restrict access to specific IPs for WordPress recovery and file manager, with an option to enter multiple IPs.
-  - **Basic Authentication:** Whether to enable Basic Auth, with prompts for username and password.
-- **Generated Values:** Automatically creates secure passwords, database settings, and optional security configurations.
-- **Encryption Option:** You can choose to encrypt the file with Ansible Vault (recommended for security).
-
-**Example Output:**
-```
-Configuration file 'group_vars/all.yml' has been created with the following values:
-------------------------------------------------
-MySQL Root Password: Kj9mPx2vL8nQ7rT4wY6c
-MySQL Database Name: wp_mysitecom
-MySQL Database User: wpuser_mysitecom
-MySQL Database Password: B5tZ8pW3qX9vM2rJ6nYk
-WordPress Admin Password: H7kL4mP9vR2tQ8wX5nYc
-WordPress Database Prefix: kh_
-IP Restriction Enabled: Yes
-Allowed IPs:
-  - "192.168.1.1"
-  - "10.0.0.2"
-Basic Authentication Enabled: Yes
-Basic Auth Username: myuser
-Basic Auth Password: [hidden for security]
-------------------------------------------------
-Please save these values in a secure place!
-```
-
-If encrypted, note the Vault password for later use.
+  - IP restrictions (optional, with allowed IPs)
+  - Basic Authentication (optional, with username/password)
+  - Redis setup (optional, with database number and secure password)
+  - Plugin installation (slugs or ZIP paths)
+  - WordPress settings (memory limits, SSL, cron, etc.)
+- **Output:** Generates secure passwords and settings. Optionally encrypts the file with Ansible Vault.
+- **Example Output:**
+  ```
+  MySQL Root Password: Kj9mPx2vL8nQ7rT4wY6c
+  WordPress Admin Password: H7kL4mP9vR2tQ8wX5nYc
+  IP Restriction Enabled: Yes (192.168.1.1, 10.0.0.2)
+  Basic Auth Enabled: Yes (myuser:[hidden])
+  ```
 
 ### **Step 4: Set Up Inventory**
-Create an `inventory` file with your target server’s IP or hostname:
+Create an `inventory` file:
 ```
 [wordpress]
 your_server_ip ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/my_vps_key ansible_port=2222
 ```
-
-Replace `your_server_ip` with your VPS IP (e.g., `185.82.164.15`) and adjust the key path if needed.
+Replace `your_server_ip` with your VPS IP (e.g., `185.82.164.15`).
 
 ### **Step 5: Run the Playbooks**
-Execute the playbooks in sequence:
+Execute all playbooks with a single command:
 ```bash
-ansible-playbook -i inventory \
-  00-update-upgrade.yml \
-  01-install-mysql.yml \
-  02-install-nginx.yml \
-  03-install-php-composer-wpcli.yml \
-  04-install-wordpress.yml \
-  05-obtain-ssl.yml \
-  --ask-become-pass
+ansible-playbook -i inventory site.yml --ask-become-pass
 ```
-
-- Use `--ask-become-pass` (or `-K`) to provide the sudo password for the VPS user if required.
-- If `all.yml` is encrypted, add both flags:
-  ```bash
-  ansible-playbook -i inventory --ask-vault-pass --ask-become-pass ...
-  ```
+- Use `--ask-vault-pass` if `all.yml` is encrypted.
+- For selective deployment, run individual playbooks (e.g., `00-update-upgrade.yml`).
 
 ### **Step 6: Verify**
-- Visit `https://yourdomain.com` to ensure WordPress is running.
-- Log in with the admin credentials displayed by `generate_config.sh`.
-- Access `https://yourdomain.com/fm/` or WordPress recovery paths; if Basic Auth is enabled, enter the username and password from `generate_config.sh`.
-- Check Nginx logs at `/var/www/yourdomain.com/logs/`.
-- Use the alias to clear Nginx cache (e.g., `cleancachemysitecom`) after logging into the server via SSH and running `source ~/.bashrc`.
+- Visit `https://yourdomain.com` to confirm WordPress is running.
+- Log in with credentials from `generate_config.sh`.
+- Test restricted paths (`/fm/` or recovery URLs) with IP or Basic Auth if enabled.
+- Check logs: `tail -f /var/www/yourdomain.com/logs/error.log`.
+- Clear cache: `source ~/.bashrc && cleancacheyourdomaincom`.
 
 ---
 
 ## **Deploying on a VPS**
 
-This section guides you through setting up WordPress on a VPS using this repository with a custom SSH port (e.g., 2222).
+### **Step 1: Prepare Control Machine**
+```bash
+sudo apt update
+sudo apt install python3-pip git openssl dialog -y
+pip3 install ansible passlib
+git clone https://github.com/jamal13647850/ansible-wordpress-setup.git
+cd ansible-wordpress-setup
+```
 
-### **Step 1: Prepare the Control Machine**
-1. **Install Ansible and Dependencies:**
+### **Step 2: Prepare VPS**
+1. **Enable SSH with Custom Port (e.g., 2222):**
    ```bash
-   sudo apt update
-   sudo apt install python3-pip -y
-   pip3 install ansible passlib
-   ansible --version  # Ensure version >= 2.9
+   sudo apt install openssh-server -y
+   sudo nano /etc/ssh/sshd_config  # Set "Port 2222"
+   sudo systemctl restart sshd
    ```
-2. **Install Git:**
-   ```bash
-   sudo apt install git -y
-   git --version
-   ```
-3. **Clone the Repository:**
-   ```bash
-   git clone https://github.com/jamal13647850/ansible-wordpress-setup.git
-   cd ansible-wordpress-setup
-   ```
-
-### **Step 2: Prepare the VPS**
-1. **Enable SSH:**
-   - Connect to your VPS (e.g., via root):
-     ```bash
-     sudo systemctl status ssh
-     sudo apt install openssh-server -y
-     sudo systemctl enable ssh
-     sudo systemctl start ssh
-     ```
-2. **Change SSH Port to 2222:**
-   - Edit SSH config:
-     ```bash
-     sudo nano /etc/ssh/sshd_config
-     ```
-     Add or modify:
-     ```
-     Port 2222
-     ```
-     Restart SSH:
-     ```bash
-     sudo systemctl restart sshd
-     ```
-3. **Create a Sudo User (Optional):**
+2. **Create Sudo User:**
    ```bash
    adduser ubuntu
    usermod -aG sudo ubuntu
    ```
-4. **Generate SSH Key:**
-   - On your local machine:
-     ```bash
-     ssh-keygen -t rsa -b 4096 -C "your.email@example.com"
-     ```
-     When prompted for a file, enter:
-     ```
-     /home/user/.ssh/my_vps_key
-     ```
-5. **Transfer SSH Key to VPS:**
+3. **Set Up SSH Key:**
    ```bash
+   ssh-keygen -t rsa -b 4096 -f ~/.ssh/my_vps_key
    ssh-copy-id -i ~/.ssh/my_vps_key.pub -p 2222 ubuntu@your_vps_ip
    ```
-   Test connection:
-   ```bash
-   ssh -i ~/.ssh/my_vps_key -p 2222 ubuntu@your_vps_ip
-   ```
-6. **Configure Firewall:**
+4. **Configure Firewall:**
    ```bash
    sudo ufw allow 2222
    sudo ufw deny 22
@@ -247,126 +200,79 @@ This section guides you through setting up WordPress on a VPS using this reposit
    ```
 
 ### **Step 3: Configure Ansible**
-1. **Create Inventory File:**
-   ```bash
-   nano inventory
-   ```
-   Add:
-   ```
-   [wordpress]
-   your_vps_ip ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/my_vps_key ansible_port=2222
-   ```
-   Replace `your_vps_ip` with your VPS IP (e.g., `185.82.164.15`).
-2. **Test Connection:**
-   ```bash
-   ansible -i inventory wordpress -m ping
-   ```
-   Expected output:
-   ```
-   your_vps_ip | SUCCESS => {"changed": false, "ping": "pong"}
-   ```
+- Create `inventory` as above.
+- Test connection:
+  ```bash
+  ansible -i inventory wordpress -m ping
+  ```
 
-### **Step 4: Generate Configuration**
+### **Step 4: Deploy**
+Run `generate_config.sh` and then:
 ```bash
-chmod +x generate_config.sh
-./generate_config.sh
+ansible-playbook -i inventory site.yml --ask-become-pass
 ```
-Answer prompts and save generated credentials, including IP restrictions and Basic Auth details if enabled.
 
-### **Step 5: Run Playbooks**
-```bash
-ansible-playbook -i inventory \
-  00-update-upgrade.yml \
-  01-install-mysql.yml \
-  02-install-nginx.yml \
-  03-install-php-composer-wpcli.yml \
-  04-install-wordpress.yml \
-  05-obtain-ssl.yml \
-  --ask-become-pass
-
-  ansible-playbook -i inventory 06-install-redis.yml --ask-become-pass
-```
-- Use `--ask-become-pass` to enter the sudo password if required.
-- If encrypted, add `--ask-vault-pass`:
-  ```bash
-  ansible-playbook -i inventory --ask-vault-pass --ask-become-pass ...
-  ```
-
-### **Step 6: Verify**
-- Access `https://yourdomain.com`.
-- Test restricted paths (e.g., `/fm/` or recovery URLs) with IP or Basic Auth credentials if configured.
-- Check logs:
-  ```bash
-  ssh -i ~/.ssh/my_vps_key -p 2222 ubuntu@your_vps_ip
-  sudo tail -f /var/www/yourdomain.com/logs/error.log
-  ```
-- Clear cache:
-  ```bash
-  source ~/.bashrc
-  cleancacheyourdomaincom
-  ```
-
-### **Step 7: Final Notes**
-- Ensure DNS points to your VPS IP.
-- Secure `group_vars/all.yml` or remove it if not encrypted.
-- Update via `git pull` and rerun playbooks as needed.
-- **Plugin Installation:** Plugins installed via this setup remain deactivated. Activate them manually via the WordPress admin panel or extend the playbook to enable specific plugins if needed.
+### **Step 5: Verify**
+Follow the verification steps above.
 
 ---
 
 ## **Playbook Details**
-1. **`00-update-upgrade.yml`**: Updates system, installs tools, adds cache alias.
-2. **`01-install-mysql.yml`**: Installs MySQL and configures it.
-3. **`02-install-nginx.yml`**: Installs Nginx, CSF, syncs CDN IPs, and generates `.htpasswd` if Basic Auth is enabled.
-4. **`03-install-php-composer-wpcli.yml`**: Installs PHP, Composer, WP-CLI.
-5. **`04-install-wordpress.yml`**: Configures Nginx, installs WordPress.
-6. **`05-obtain-ssl.yml`**: Obtains SSL certificate.
-7. **`06-install-redis.yml`**: Installs and configures Redis with secure settings if enabled.
+- **`00-update-upgrade.yml`:** Updates system, installs tools, adds cache alias.
+- **`01-install-mysql.yml`:** Installs and configures MySQL.
+- **`02-install-nginx.yml`:** Sets up Nginx, CSF, and CDN IP sync.
+- **`03-install-php-composer-wpcli.yml`:** Installs PHP, Composer, WP-CLI.
+- **`04-install-wordpress.yml`:** Installs WordPress with custom settings.
+- **`05-obtain-ssl.yml`:** Obtains SSL certificates.
+- **`06-install-redis.yml`:** Installs Redis (optional).
+- **Additional Playbooks:** Support backups, SMTP, monitoring, image optimization, security, migration, CDN, Docker, and more.
 
 ---
 
 ## **Nginx Configuration**
-- **FastCGI Caching:** Managed via alias (e.g., `cleancachemysitecom`).
-- **Security Headers:** Protects against XSS, clickjacking.
-- **CDN Integration:** Supports Cloudflare/ArvanCloud.
-- **WordPress Rules:** Restricts sensitive files, throttles `wp-login.php`.
-- **Access Control:** Configurable IP restrictions and Basic Authentication for file manager and recovery paths.
+- **FastCGI Caching:** Configured with a 100MB cache and 60-minute inactivity timeout.
+- **Security Headers:** Protects against XSS, clickjacking, etc.
+- **CDN Support:** Integrates Cloudflare/ArvanCloud with real IP headers.
+- **WordPress Rules:** Blocks sensitive files, throttles `wp-login.php`.
+- **Access Control:** IP restrictions and Basic Auth for `/fm/` and recovery paths.
 
 ---
 
 ## **Security Notes**
-- **Passwords:** Store credentials securely.
-- **Encryption:** Use Ansible Vault for `all.yml`.
-- **Firewall:** CSF whitelists CDN IPs; `clamav` and `rkhunter` installed.
-- **Permissions:** Files set to `664`, directories to `775`, owned by `www-data`.
-- **Basic Auth:** `.htpasswd` file is generated with restricted permissions (`0640`).
+- **Credentials:** Store passwords from `generate_config.sh` securely.
+- **Encryption:** Use Ansible Vault for `all.yml` (optional).
+- **Firewall:** CSF whitelists CDN IPs; `clamav` and `rkhunter` enhance security.
+- **Permissions:** Files set to `0644`, directories to `0755`, owned by `www-data`.
+- **Basic Auth:** `.htpasswd` generated with `0640` permissions.
 
 ---
 
 ## **Troubleshooting**
-- **SSH Issues:** Verify `sudo netstat -tuln | grep 2222` and key in `~/.ssh/authorized_keys`.
-- **Sudo Password:** Use `--ask-become-pass` if prompted.
-- **Nginx Errors:** Check `/var/www/yourdomain.com/logs/error.log`.
-- **Certbot:** Ensure DNS is set (`dig yourdomain.com`).
+- **SSH Issues:** Check port (`netstat -tuln | grep 2222`) and `~/.ssh/authorized_keys`.
+- **Sudo Prompt:** Use `--ask-become-pass`.
+- **Nginx Errors:** View `/var/www/yourdomain.com/logs/error.log`.
+- **Certbot Failure:** Verify DNS (`dig yourdomain.com`).
 - **Permissions:** Fix with `sudo chown -R www-data:www-data /var/www/yourdomain.com`.
-- **Basic Auth Issues:** Verify `.htpasswd` exists (`cat /etc/nginx/sites-available/yourdomain.comhelper/.htpasswd`) and credentials match.
+- **Basic Auth:** Confirm `.htpasswd` contents (`cat /etc/nginx/sites-available/yourdomain.comhelper/.htpasswd`).
 
 ---
 
 ## **Customization**
-- **PHP Version:** Set in `generate_config.sh`.
+- **PHP Version:** Set via `generate_config.sh`.
 - **Redirects:** Edit `templates/redirects.j2`.
 - **Security Headers:** Modify `templates/securityheaders.j2`.
-- **Access Control:** Adjust IP restrictions and Basic Auth via `generate_config.sh`.
+- **Plugins:** Add slugs or ZIP paths in `generate_config.sh`.
+- **Cron:** Enable system cron in `generate_config.sh` to replace WP-Cron.
 
 ---
 
 ## **Contributing**
-Submit issues or pull requests to improve this project!
+Feel free to submit issues or pull requests to enhance this project!
 
 ---
 
 ## **License**
-MIT License.
+MIT License - See `LICENSE` for details.
+
 
 

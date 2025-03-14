@@ -6,60 +6,83 @@ fastcgi_cache_key "$scheme$request_method$host$request_uri";
 limit_req_log_level warn;
 limit_req_zone $binary_remote_addr zone=login:10m rate=10r/m;
 
-# HTTP Server (redirects to HTTPS)
-
+# HTTP Server (redirects to HTTPS if SSL is enabled)
 server {
-    if ($host = www.www.{{ domain }}) {
-        return 301 https://$host$request_uri;
-    } 
-
-
-    if ($host = www.{{ domain }}) {
-        return 301 https://$host$request_uri;
-    } 
-
-
     listen 80;
+    listen [::]:80;
+    server_name {{ domain }} www.{{ domain }} {% for extra_domain in extra_domains | default([]) %}{{ extra_domain }} www.{{ extra_domain }} {% endfor %};
 
-    server_name www.{{ domain }} www.{{ domain }};
-    return 404; 
-
-}
-
-
-# HTTPS Server
-server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
-
-    server_name {{ domain }} www.{{ domain }};
+    {% if ssl_email is defined and ssl_email != "" %}
+    # Redirect all HTTP traffic to HTTPS
+    return 301 https://$host$request_uri;
+    {% else %}
     root /var/www/{{ domain }}/html;
     index index.php index.html index.htm;
 
-    # Logs
     access_log /var/www/{{ domain }}/logs/access.log;
-    error_log /var/www/{{ domain }}/logs/error.log;
+    error_log /var/www/{{ domain }}/logs/error.log warn;
+
+    # Include helper configurations for HTTP
+    include /etc/nginx/sites-available/{{ domain }}helper/cloudflare.conf;
+    include /etc/nginx/sites-available/{{ domain }}helper/arvancloud.conf;
+    include /etc/nginx/sites-available/{{ domain }}helper/keepalive.conf;
+    include /etc/nginx/sites-available/{{ domain }}helper/gzip.conf;
+    include /etc/nginx/sites-available/{{ domain }}helper/general.conf;
+    include /etc/nginx/sites-available/{{ domain }}helper/wordpress.conf;
+    include /etc/nginx/sites-available/{{ domain }}helper/filemanager.conf;
+
+    location / {
+        try_files $uri $uri/ /index.php?$args;
+    }
+
+    location ~ \.php$ {
+        include fastcgi_params;
+        fastcgi_cache_bypass $no_cache;
+        fastcgi_no_cache $no_cache;
+        fastcgi_cache phpcache_{{ domain }};
+        fastcgi_cache_valid 200 301 302 30m;
+        fastcgi_cache_methods GET HEAD;
+        fastcgi_pass unix:/run/php/php{{ php_version }}-fpm.sock;
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        include /etc/nginx/sites-available/{{ domain }}helper/securityheaders.conf;
+    }
+    {% endif %}
+}
+
+# HTTPS Server (if SSL is enabled)
+{% if ssl_email is defined and ssl_email != "" %}
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name {{ domain }} www.{{ domain }} {% for extra_domain in extra_domains | default([]) %}{{ extra_domain }} www.{{ extra_domain }} {% endfor %};
+
+    root /var/www/{{ domain }}/html;
+    index index.php index.html index.htm;
 
     # SSL Configuration
     ssl_certificate /etc/letsencrypt/live/{{ domain }}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/{{ domain }}/privkey.pem;
     ssl_trusted_certificate /etc/letsencrypt/live/{{ domain }}/chain.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
-    #ssl_protocols TLSv1.2 TLSv1.3;
-    #ssl_prefer_server_ciphers on;
-    #ssl_ciphers EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_ciphers EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # Logs
+    access_log /var/www/{{ domain }}/logs/access.log;
+    error_log /var/www/{{ domain }}/logs/error.log warn;
 
     # Performance optimizations
-    proxy_read_timeout 700;
-    proxy_connect_timeout 700;
-    proxy_send_timeout 700;
-    fastcgi_read_timeout 700;
-    proxy_max_temp_file_size 0;
     client_max_body_size 10M;
     fastcgi_buffers 16 16k;
     fastcgi_buffer_size 32k;
+    fastcgi_read_timeout 700;
+    proxy_read_timeout 700;
+    proxy_connect_timeout 700;
+    proxy_send_timeout 700;
 
     # Open file cache
     open_file_cache max=5000 inactive=60s;
@@ -96,18 +119,18 @@ server {
         fastcgi_cache_methods GET HEAD;
         fastcgi_max_temp_file_size 0;
         add_header X-FastCGI-Cache $upstream_cache_status;
-        fastcgi_pass unix:/var/run/php/php{{ php_version }}-fpm.sock;
+        fastcgi_pass unix:/run/php/php{{ php_version }}-fpm.sock;
         fastcgi_index index.php;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         include /etc/nginx/sites-available/{{ domain }}helper/securityheaders.conf;
     }
 
-    # Deny hidden files
-    location ~ /\.ht {
+    # Deny access to hidden files
+    location ~ /\. {
         deny all;
     }
 
-    # Custom error pages (optional)
+    # Custom error pages
     error_page 403 /custom_403.html;
     error_page 404 /custom_404.html;
     location = /custom_403.html {
@@ -119,3 +142,4 @@ server {
         internal;
     }
 }
+{% endif %}

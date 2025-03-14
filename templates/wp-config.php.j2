@@ -1,0 +1,27 @@
+<?php
+define('DB_NAME', '{{ mysql_db_name }}');
+define('DB_USER', '{{ mysql_db_user }}');
+define('DB_PASSWORD', '{{ mysql_db_password }}');
+define('DB_HOST', 'localhost');
+define('DB_CHARSET', 'utf8mb4');
+define('DB_COLLATE', '');
+$table_prefix = '{{ wordpress_db_prefix }}';
+define('AUTH_KEY',         '{{ lookup("password", "/dev/null length=64") }}');
+define('SECURE_AUTH_KEY',  '{{ lookup("password", "/dev/null length=64") }}');
+define('LOGGED_IN_KEY',    '{{ lookup("password", "/dev/null length=64") }}');
+define('NONCE_KEY',        '{{ lookup("password", "/dev/null length=64") }}');
+define('AUTH_SALT',        '{{ lookup("password", "/dev/null length=64") }}');
+define('SECURE_AUTH_SALT', '{{ lookup("password", "/dev/null length=64") }}');
+define('LOGGED_IN_SALT',   '{{ lookup("password", "/dev/null length=64") }}');
+define('NONCE_SALT',       '{{ lookup("password", "/dev/null length=64") }}');
+define('WP_DEBUG', {{ wp_debug | default('false') }});
+{% if install_redis %}
+define('WP_REDIS_HOST', '{{ wp_redis_host }}');
+define('WP_REDIS_PORT', {{ wp_redis_port }});
+define('WP_REDIS_PASSWORD', '{{ wp_redis_password }}');
+define('WP_REDIS_DATABASE', {{ wp_redis_database }});
+{% endif %}
+if (!defined('ABSPATH')) {
+    define('ABSPATH', dirname(__FILE__) . '/');
+}
+require_once(ABSPATH . 'wp-settings.php');

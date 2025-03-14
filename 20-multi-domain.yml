@@ -1,0 +1,9 @@
+- hosts: all
+  become: true
+  tasks:
+    - name: Configure Nginx for extra domains
+      template:
+        src: templates/nginx.conf.j2
+        dest: "/etc/nginx/sites-available/{{ domain }}"
+      notify: Restart Nginx
+      when: enable_multi_domain | bool or enable_parked_domains | bool

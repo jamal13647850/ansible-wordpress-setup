@@ -1,0 +1,35 @@
+- hosts: all
+  become: true
+  tasks:
+    - name: Copy database backup to server
+      copy:
+        src: "{{ migration_db_path }}"
+        dest: "/tmp/migration_db.sql"
+      when: enable_migration | bool
+
+    - name: Copy files backup to server
+      copy:
+        src: "{{ migration_files_path }}"
+        dest: "/tmp/migration_files.tar.gz"
+      when: enable_migration | bool
+
+    - name: Restore database
+      shell: mysql -u {{ mysql_db_user }} -p'{{ mysql_db_password }}' {{ mysql_db_name }} < /tmp/migration_db.sql
+      when: enable_migration | bool
+
+    - name: Extract files
+      unarchive:
+        src: "/tmp/migration_files.tar.gz"
+        dest: "/var/www/{{ domain }}/html"
+        owner: www-data
+        group: www-data
+      when: enable_migration | bool
+
+    - name: Clean up temporary files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/migration_db.sql"
+        - "/tmp/migration_files.tar.gz"
+      when: enable_migration | bool

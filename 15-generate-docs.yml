@@ -1,0 +1,6 @@
+- hosts: localhost
+  tasks:
+    - name: Generate multilingual READMEs (placeholder)
+      debug:
+        msg: "Generate README for languages: {{ doc_languages }}"
+      when: enable_multilingual_docs | bool
