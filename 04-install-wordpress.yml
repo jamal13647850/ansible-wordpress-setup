@@ -1,11 +1,11 @@
 ---
-- hosts: all
+- hosts: wordpress
   become: true
   tasks:
     - name: Ensure required variables are defined
       fail:
         msg: "Required variable '{{ item }}' is not defined."
-      when: vars[item] is not defined
+      when: domain_config[item] is not defined
       loop:
         - domain
         - wordpress_admin_user
@@ -14,208 +14,47 @@
         - wordpress_title
         - wordpress_db_prefix
         - mysql_db_name
-        - mysql_db_user
-        - mysql_db_password
 
     - name: Create WordPress directory
       file:
-        path: "/var/www/{{ domain }}/html"
+        path: "/var/www/{{ domain_config.domain }}/html"
         state: directory
         owner: www-data
         group: www-data
         mode: '0755'
 
-    - name: Download and extract WordPress
-      unarchive:
-        src: "https://wordpress.org/latest.tar.gz"
-        dest: "/var/www/{{ domain }}"
-        remote_src: yes
-        owner: www-data
-        group: www-data
-        extra_opts: [--strip-components=1]
-      when: not enable_migration | bool
+    - name: Download WordPress
+      shell: wp core download --locale={{ domain_config.wordpress_locale | default('en_US') }} --allow-root
+      args:
+        chdir: "/var/www/{{ domain_config.domain }}/html"
+        creates: "/var/www/{{ domain_config.domain }}/html/wp-config.php"
 
     - name: Copy wp-config.php template
       template:
-        src: templates/wp-config.php.j2
-        dest: "/var/www/{{ domain }}/html/wp-config.php"
+        src: wp-config.php.j2
+        dest: "/var/www/{{ domain_config.domain }}/html/wp-config.php"
         owner: www-data
         group: www-data
         mode: '0644'
-      when: not enable_migration | bool
 
     - name: Install WordPress core
       shell: |
         wp core install \
-          --url="{{ 'https' if ssl_email is defined and ssl_email != '' else 'http' }}://{{ domain }}" \
-          --title="{{ wordpress_title }}" \
-          --admin_user="{{ wordpress_admin_user }}" \
-          --admin_password="{{ wordpress_admin_password }}" \
-          --admin_email="{{ wordpress_admin_email }}" \
-          --locale="{{ wordpress_locale | default('en_US') }}" \
+          --url="https://{{ domain_config.domain }}" \
+          --title="{{ domain_config.wordpress_title }}" \
+          --admin_user="{{ domain_config.wordpress_admin_user }}" \
+          --admin_password="{{ domain_config.wordpress_admin_password }}" \
+          --admin_email="{{ domain_config.wordpress_admin_email }}" \
+          --locale="{{ domain_config.wordpress_locale | default('en_US') }}" \
           --allow-root
       args:
-        chdir: "/var/www/{{ domain }}/html"
-      when: not enable_migration | bool
-
-    - name: Add additional WordPress users
-      shell: |
-        wp user create {{ item.username }} {{ item.email }} \
-          --role={{ item.role }} \
-          --user_pass=$(openssl rand -base64 12) \
-          --allow-root
-      args:
-        chdir: "/var/www/{{ domain }}/html"
-      loop: "{{ wp_users }}"
-      when: add_wp_users | bool
-
-    - name: Install Redis Object Cache plugin
-      shell: wp plugin install redis-cache --allow-root
-      args:
-        chdir: "/var/www/{{ domain }}/html"
-      when: install_redis | bool
-
-    - name: Install WooCommerce
-      shell: wp plugin install woocommerce --activate --allow-root
-      args:
-        chdir: "/var/www/{{ domain }}/html"
-      when: enable_woocommerce | bool
-
-    - name: Install Yoast SEO
-      shell: wp plugin install wordpress-seo --activate --allow-root
-      args:
-        chdir: "/var/www/{{ domain }}/html"
-      when: enable_seo | bool
-
-    - name: Install Contact Form 7
-      shell: wp plugin install contact-form-7 --activate --allow-root
-      args:
-        chdir: "/var/www/{{ domain }}/html"
-      when: enable_form_builder | bool
-
-    - name: Install AMP plugin
-      shell: wp plugin install amp --activate --allow-root
-      args:
-        chdir: "/var/www/{{ domain }}/html"
-      when: enable_amp | bool
-
-    - name: Install Lazy Load plugin
-      shell: wp plugin install lazy-load --activate --allow-root
-      args:
-        chdir: "/var/www/{{ domain }}/html"
-      when: enable_lazy_loading | bool
-
-    - name: Install Limit Login Attempts
-      shell: wp plugin install limit-login-attempts-reloaded --activate --allow-root
-      args:
-        chdir: "/var/www/{{ domain }}/html"
-      when: enable_login_limit | bool
-
-    - name: Install Akismet for Anti-Spam
-      shell: wp plugin install akismet --activate --allow-root
-      args:
-        chdir: "/var/www/{{ domain }}/html"
-      when: enable_anti_spam | bool
-
-    - name: Install custom plugins from WordPress.org
-      shell: wp plugin install {{ item.slug }} --activate --allow-root
-      args:
-        chdir: "/var/www/{{ domain }}/html"
-      loop: "{{ plugins | selectattr('source', 'equalto', 'wordpress') | list }}"
-      when: install_plugins | bool
-
-    - name: Install custom plugins from local ZIP files
-      shell: wp plugin install {{ item.path }} --activate --allow-root
-      args:
-        chdir: "/var/www/{{ domain }}/html"
-      loop: "{{ plugins | selectattr('source', 'equalto', 'local') | list }}"
-      when: install_plugins | bool
-
-    - name: Configure WordPress Multisite
-      shell: |
-        wp core multisite-install \
-          --url="http://{{ domain }}" \
-          --title="{{ wordpress_title }}" \
-          --admin_user="{{ wordpress_admin_user }}" \
-          --admin_password="{{ wordpress_admin_password }}" \
-          --admin_email="{{ wordpress_admin_email }}" \
-          --subdomains={{ 'true' if multisite_type == 'subdomain' else 'false' }} \
-          --allow-root
-      args:
-        chdir: "/var/www/{{ domain }}/html"
-      when: enable_multisite | bool and not enable_migration | bool
-
-    - name: Set WordPress memory limits
-      lineinfile:
-        path: "/var/www/{{ domain }}/html/wp-config.php"
-        insertbefore: "/* That's all, stop editing! Happy publishing. */"
-        line: "{{ item }}"
-      loop:
-        - "define('WP_MEMORY_LIMIT', '{{ wp_memory_limit | default('64M') }}');"
-        - "define('WP_MAX_MEMORY_LIMIT', '{{ wp_max_memory_limit | default('256M') }}');"
-      when: wp_memory_limit is defined or wp_max_memory_limit is defined
-
-    - name: Force SSL login
-      lineinfile:
-        path: "/var/www/{{ domain }}/html/wp-config.php"
-        insertbefore: "/* That's all, stop editing! Happy publishing. */"
-        line: "define('FORCE_SSL_LOGIN', {{ force_ssl_login | default('false') }});"
-      when: force_ssl_login is defined
-
-    - name: Force SSL admin
-      lineinfile:
-        path: "/var/www/{{ domain }}/html/wp-config.php"
-        insertbefore: "/* That's all, stop editing! Happy publishing. */"
-        line: "define('FORCE_SSL_ADMIN', {{ force_ssl_admin | default('false') }});"
-      when: force_ssl_admin is defined
-
-    - name: Disallow file editing
-      lineinfile:
-        path: "/var/www/{{ domain }}/html/wp-config.php"
-        insertbefore: "/* That's all, stop editing! Happy publishing. */"
-        line: "define('DISALLOW_FILE_EDIT', {{ disallow_file_edit | default('true') }});"
-      when: disallow_file_edit is defined
-
-    - name: Set FS_METHOD to direct
-      lineinfile:
-        path: "/var/www/{{ domain }}/html/wp-config.php"
-        insertbefore: "/* That's all, stop editing! Happy publishing. */"
-        line: "define('FS_METHOD', '{{ fs_method | default('direct') }}');"
-      when: fs_method is defined
-
-    - name: Disable WP-Cron
-      lineinfile:
-        path: "/var/www/{{ domain }}/html/wp-config.php"
-        insertbefore: "/* That's all, stop editing! Happy publishing. */"
-        line: "define('DISABLE_WP_CRON', {{ disable_wp_cron | default('false') }});"
-      when: disable_wp_cron is defined
-
-    - name: Enable WordPress debug logging
-      lineinfile:
-        path: "/var/www/{{ domain }}/html/wp-config.php"
-        insertbefore: "/* That's all, stop editing! Happy publishing. */"
-        line: "{{ item }}"
-      loop:
-        - "define('WP_DEBUG', {{ wp_debug | default('false') }});"
-        - "define('WP_DEBUG_LOG', true);"
-        - "define('WP_DEBUG_DISPLAY', false);"
-      when: enable_monitoring | bool and wp_debug | bool
-
-    - name: Optimize database
-      shell: wp db optimize --allow-root
-      args:
-        chdir: "/var/www/{{ domain }}/html"
-      when: enable_db_optimization | bool
-
-    - name: Perform auto-test
-      shell: curl -I http://{{ domain }} | grep "200 OK"
-      register: test_result
-      failed_when: test_result.rc != 0
-      when: enable_auto_test | bool
+        chdir: "/var/www/{{ domain_config.domain }}/html"
+      register: wp_install
+      failed_when: wp_install.rc != 0 and "WordPress is already installed" not in wp_install.stderr
 
     - name: Ensure WordPress ownership
       file:
-        path: "/var/www/{{ domain }}/html"
+        path: "/var/www/{{ domain_config.domain }}/html"
         owner: www-data
         group: www-data
         recurse: yes

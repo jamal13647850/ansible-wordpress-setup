@@ -1,56 +1,56 @@
-- hosts: all
-  become: true  
+- hosts: wordpress
+  become: true
   tasks:
-    - name: Install MySQL Python modules  
-      apt:  
-        name:  
-          - python3-mysqldb  
-          - python3-pymysql  
-        state: present 
+    - name: Install MySQL Python modules
+      apt:
+        name:
+          - python3-mysqldb
+          - python3-pymysql
+        state: present
 
-    - name: Install MySQL package  
-      apt:  
-        name: mysql-server  
-        state: present  
-        update_cache: yes  
+    - name: Install MySQL package
+      apt:
+        name: mysql-server
+        state: present
+        update_cache: yes
 
-    - name: Start MySQL service  
-      systemd:  
-        name: mysql  
-        state: started  
-        enabled: yes  
+    - name: Start MySQL service
+      systemd:
+        name: mysql
+        state: started
+        enabled: yes
 
-    - name: Set MySQL root password  
-      mysql_user:  
-        name: root  
-        password: "{{ mysql_root_password }}"  
-        host: localhost  
-        login_unix_socket: /var/run/mysqld/mysqld.sock  
-        state: present  
+    - name: Set MySQL root password
+      mysql_user:
+        name: root
+        password: "{{ domain_config.mysql_root_password }}"
+        host: localhost
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        state: present
 
-    - name: Create a new MySQL database  
-      mysql_db: 
+    - name: Create a new MySQL database
+      mysql_db:
         login_user: root
-        login_password: "{{ mysql_root_password }}" 
-        name: "{{ mysql_db_name }}"  
-        state: present  
+        login_password: "{{ domain_config.mysql_root_password }}"
+        name: "{{ domain_config.mysql_db_name }}"
+        state: present
 
-    - name: Create a new MySQL user  
-      mysql_user:  
+    - name: Create a new MySQL user
+      mysql_user:
         login_user: root
-        login_password: "{{ mysql_root_password }}" 
-        name: "{{ mysql_db_user }}"  
-        password: "{{ mysql_db_password }}"  
-        priv: "{{ mysql_db_name }}.*:ALL"  
+        login_password: "{{ domain_config.mysql_root_password }}"
+        name: "{{ domain_config.mysql_db_user }}"
+        password: "{{ domain_config.mysql_db_password }}"
+        priv: "{{ domain_config.mysql_db_name }}.*:ALL"
         host: "%"
-        state: present  
+        state: present
 
-    - name: Display MySQL version  
-      command: mysql --version  
-      register: mysql_version  
-      changed_when: false  
+    - name: Display MySQL version
+      command: mysql --version
+      register: mysql_version
+      changed_when: false
 
-    - name: Print MySQL version  
-      debug:  
-        msg: "MySQL version: {{ mysql_version.stdout }}"  
+    - name: Print MySQL version
+      debug:
+        msg: "MySQL version: {{ mysql_version.stdout }}"
       when: ansible_verbosity > 1

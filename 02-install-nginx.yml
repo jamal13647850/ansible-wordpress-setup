@@ -1,4 +1,4 @@
-- hosts: all
+- hosts: wordpress
   become: true
   tasks:
     - name: Add Nginx GPG key to trusted.gpg.d
@@ -28,7 +28,6 @@
       args:
         creates: /etc/csf/csf.conf
 
-
     - name: Ensure Nginx runs as www-data user
       lineinfile:
         path: /etc/nginx/nginx.conf
@@ -36,7 +35,7 @@
         line: 'user www-data;'
         state: present
       notify: Restart Nginx
-      
+
     - name: Start Nginx service
       systemd:
         name: nginx
@@ -45,27 +44,27 @@
 
     - name: Create helper directory
       file:
-        path: "/etc/nginx/sites-available/{{ domain }}helper"
+        path: "/etc/nginx/sites-available/{{ domain_config.domain }}helper"
         state: directory
         mode: '0755'
 
     - name: Copy helper configuration files
       ansible.builtin.template:
         src: "{{ item }}"
-        dest: "/etc/nginx/sites-available/{{ domain }}helper/{{ item | basename | regex_replace('.j2$', '') }}"
+        dest: "/etc/nginx/sites-available/{{ domain_config.domain }}helper/{{ item | basename | regex_replace('.j2$', '') }}"
         mode: '0644'
       loop:
         - templates/arvancloud-ip-sync.sh.j2
-        - templates/cache.conf.j2
+        - templates/cache.j2
         - templates/cloudflare-ip-sync.sh.j2
-        - templates/cloudflare.conf.j2
-        - templates/filemanager.conf.j2
-        - templates/general.conf.j2
-        - templates/gzip.conf.j2
-        - templates/keepalive.conf.j2
-        - templates/redirects.conf.j2
-        - templates/securityheaders.conf.j2
-        - templates/wordpress.conf.j2
+        - templates/cloudflare.j2
+        - templates/filemanager.j2
+        - templates/general.j2
+        - templates/gzip.j2
+        - templates/keepalive.j2
+        - templates/redirects.j2
+        - templates/securityheaders.j2
+        - templates/wordpress.j2
       notify: Restart Nginx
 
     - name: Install htpasswd package on target server
@@ -76,37 +75,37 @@
 
     - name: Create .htpasswd file for Basic Authentication
       htpasswd:
-        path: "/etc/nginx/sites-available/{{ domain }}helper/.htpasswd"
-        name: "{{ basic_auth_user }}"
-        password: "{{ basic_auth_password }}"
+        path: "/etc/nginx/sites-available/{{ domain_config.domain }}helper/.htpasswd"
+        name: "{{ domain_config.basic_auth_user }}"
+        password: "{{ domain_config.basic_auth_password }}"
         owner: www-data
         group: www-data
         mode: '0640'
         state: present
-      when: enable_basic_auth | bool
-      notify: Restart Nginx  
+      when: domain_config.enable_basic_auth | bool
+      notify: Restart Nginx
 
     - name: Make sync scripts executable
       file:
-        path: "/etc/nginx/sites-available/{{ domain }}helper/{{ item }}"
+        path: "/etc/nginx/sites-available/{{ domain_config.domain }}helper/{{ item }}"
         mode: '0755'
       loop:
         - arvancloud-ip-sync.sh
         - cloudflare-ip-sync.sh
 
     - name: Run Cloudflare IP sync
-      shell: "/etc/nginx/sites-available/{{ domain }}helper/cloudflare-ip-sync.sh"
+      shell: "/etc/nginx/sites-available/{{ domain_config.domain }}helper/cloudflare-ip-sync.sh"
       args:
-        creates: "/etc/nginx/sites-available/{{ domain }}helper/cloudflare.conf"
+        creates: "/etc/nginx/sites-available/{{ domain_config.domain }}helper/cloudflare.conf"
 
     - name: Run ArvanCloud IP sync
-      shell: "/etc/nginx/sites-available/{{ domain }}helper/arvancloud-ip-sync.sh"
+      shell: "/etc/nginx/sites-available/{{ domain_config.domain }}helper/arvancloud-ip-sync.sh"
       args:
-        creates: "/etc/nginx/sites-available/{{ domain }}helper/arvancloud.conf"
+        creates: "/etc/nginx/sites-available/{{ domain_config.domain }}helper/arvancloud.conf"
 
     - name: Create Nginx logs directory
       file:
-        path: "/var/www/{{ domain }}/logs"
+        path: "/var/www/{{ domain_config.domain }}/logs"
         state: directory
         owner: www-data
         group: www-data
@@ -114,11 +113,25 @@
 
     - name: Create Nginx cache directory
       file:
-        path: "/etc/nginx/cache/{{ domain }}"
+        path: "/etc/nginx/cache/{{ domain_config.domain }}"
         state: directory
         owner: www-data
         group: www-data
-        mode: '0755'    
+        mode: '0755'
+
+    - name: Copy Nginx configuration
+      template:
+        src: nginx.conf.j2
+        dest: "/etc/nginx/sites-available/{{ domain_config.domain }}.conf"
+        mode: '0644'
+      notify: Restart Nginx
+
+    - name: Enable Nginx site
+      file:
+        src: "/etc/nginx/sites-available/{{ domain_config.domain }}.conf"
+        dest: "/etc/nginx/sites-enabled/{{ domain_config.domain }}.conf"
+        state: link
+      notify: Restart Nginx
 
   handlers:
     - name: Restart Nginx

@@ -1,20 +1,53 @@
 ---
-mysql_root_password: "your_secure_password"
-mysql_db_name: "wordpress_db"
-mysql_db_user: "wordpress_user"
-mysql_db_password: "another_secure_password"
-domain: "yourdomain.com"
-wordpress_admin_user: "admin"
-wordpress_admin_password: "wp_admin_password"
-wordpress_admin_email: "admin@yourdomain.com"
-wordpress_title: "My WordPress Site"
-wordpress_locale: "en_US"  # Change to "fa_IR" for Persian, etc.
-wordpress_db_prefix: "wp_"
-ssl_email: "your@email.com"
-php_version: "8.3"
-linux_username: "ubuntu"  # Your server user
-restrict_ip_access: false
-allowed_ips: []
-enable_basic_auth: false
-basic_auth_user: "admin"
-basic_auth_password: "secure_password"
+domains:
+  mysite.com:
+    mysql_root_password: "Kj9mPx2vL8nQ7rT4wY6c"
+    mysql_db_name: "wp_mysite"
+    mysql_db_user: "mysite_user"
+    mysql_db_password: "H7kL4mP9vR2tQ8wX5nYc"
+    domain: "mysite.com"
+    wordpress_admin_user: "admin1"
+    wordpress_admin_password: "Xy7nK2mP4vL9rQ8tW5c"
+    wordpress_admin_email: "admin1@mysite.com"
+    wordpress_title: "My First Site"
+    wordpress_locale: "en_US"
+    wordpress_db_prefix: "wp1_"
+    ssl_email: "admin1@mysite.com"
+    php_version: "8.3"
+    linux_username: "ubuntu"
+    restrict_ip_access: false
+    allowed_ips: []
+    enable_basic_auth: false
+    basic_auth_user: "admin"
+    basic_auth_password: "secure_password"
+    install_redis: true
+    wp_redis_host: "127.0.0.1"
+    wp_redis_port: 6379
+    wp_redis_password: "redis_pass_1"
+    wp_redis_database: 0
+
+  newsite.com:
+    mysql_root_password: "Kj9mPx2vL8nQ7rT4wY6c"  # می‌تونید جداگانه تنظیم کنید
+    mysql_db_name: "wp_newsite"
+    mysql_db_user: "newsite_user"
+    mysql_db_password: "J8mL5nP2vR7tQ9wX4cY"
+    domain: "newsite.com"
+    wordpress_admin_user: "admin2"
+    wordpress_admin_password: "Zy9nL3mP5vR8tQ7wX6c"
+    wordpress_admin_email: "admin2@newsite.com"
+    wordpress_title: "My Second Site"
+    wordpress_locale: "en_US"
+    wordpress_db_prefix: "wp2_"
+    ssl_email: "admin2@newsite.com"
+    php_version: "8.3"
+    linux_username: "ubuntu"
+    restrict_ip_access: false
+    allowed_ips: []
+    enable_basic_auth: false
+    basic_auth_user: "admin"
+    basic_auth_password: "secure_password"
+    install_redis: true
+    wp_redis_host: "127.0.0.1"
+    wp_redis_port: 6379
+    wp_redis_password: "redis_pass_2"
+    wp_redis_database: 1
