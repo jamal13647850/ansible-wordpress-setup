@@ -8,6 +8,12 @@
         state: latest  
         update_cache: yes  
 
+    - name: Check if domain resolves to server IP
+      shell: "host {{ domain }} | grep $(curl -s ifconfig.me)"
+      register: domain_resolves
+      ignore_errors: yes
+      changed_when: false
+
     - name: Check if SSL certificate exists  
       stat:  
         path: "/etc/letsencrypt/live/{{ domain }}/fullchain.pem"  
@@ -15,11 +21,22 @@
 
     - name: Obtain SSL certificate with Certbot  
       command: certbot --nginx -d {{ domain }} -d www.{{ domain }} --email {{ ssl_email }} --agree-tos --redirect --non-interactive  
-      when: not ssl_cert.stat.exists  
+      when: 
+        - not ssl_cert.stat.exists
+        - domain_resolves.rc == 0
       notify: Restart Nginx  
+      register: certbot_result
+      failed_when: 
+        - certbot_result.rc != 0
+        - "'too many certificates already issued for exact set of domains' not in certbot_result.stderr"
+
+    - name: Warning if domain does not resolve to server IP
+      debug:
+        msg: "WARNING: The domain {{ domain }} does not resolve to this server's IP. SSL certificate could not be obtained."
+      when: domain_resolves.rc != 0
 
   handlers:  
     - name: Restart Nginx  
       service:  
         name: nginx  
-        state: restarted  
+        state: restarted

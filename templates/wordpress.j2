@@ -66,7 +66,7 @@ location = /wp-login.php {
         fastcgi_max_temp_file_size 0;
 
         add_header X-Fastcgi-Cache $upstream_cache_status; # Add header so we can see if the cache hits or misses
-        fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+        fastcgi_pass unix:/var/run/php/php{{ php_version }}-fpm.sock;
 		fastcgi_index index.php;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         include    /etc/nginx/sites-available/{{ domain }}helper/securityheaders.conf;
@@ -252,9 +252,12 @@ location = /wp-login.php {
 
 	# محافظت از فایل های سیستم- امنیت > تنظیمات> ترفندهای سیستم> فایل های سیستم
 	location = /wp-admin/install.php { 
-		allow 185.235.41.193;
-    		allow 65.108.163.73;
-		deny all;
+		{% if restrict_ip_access %}
+    {% for ip in allowed_ips %}
+    allow {{ ip }};
+    {% endfor %}
+    deny all;
+    {% endif %}
 		include fastcgi_params;
         	fastcgi_cache_bypass $no_cache;
         	fastcgi_no_cache $no_cache;
@@ -264,7 +267,7 @@ location = /wp-login.php {
         	fastcgi_max_temp_file_size 0;
 
         	add_header X-Fastcgi-Cache $upstream_cache_status; # Add header so we can see if the cache hits or misses
-        	fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+        	fastcgi_pass unix:/var/run/php/php{{ php_version }}-fpm.sock;
 			fastcgi_index index.php;
         	fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         	include    /etc/nginx/sites-available/{{ domain }}helper/securityheaders.conf;
