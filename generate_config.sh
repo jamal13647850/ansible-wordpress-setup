@@ -76,21 +76,7 @@ basic_settings() {
     WP_DB_PREFIX=$(generate_db_prefix)
 
     # Store settings for this domain
-    eval "DOMAIN_${domain//./_}_SETTINGS='
-mysql_root_password: \"$MYSQL_ROOT_PASSWORD\"
-mysql_db_name: \"$MYSQL_DB_NAME\"
-mysql_db_user: \"$MYSQL_DB_USER\"
-mysql_db_password: \"$MYSQL_DB_PASSWORD\"
-domain: \"$domain\"
-wordpress_admin_user: \"$WP_ADMIN_USER\"
-wordpress_admin_password: \"$WP_ADMIN_PASSWORD\"
-wordpress_admin_email: \"$WP_ADMIN_EMAIL\"
-wordpress_title: \"$WP_TITLE\"
-wordpress_locale: \"$WP_LOCALE\"
-wordpress_db_prefix: \"$WP_DB_PREFIX\"
-ssl_email: \"$SSL_EMAIL\"
-php_version: \"$PHP_VERSION\"
-linux_username: \"$LINUX_USERNAME\"'"
+    eval "DOMAIN_${domain//./_}_SETTINGS='\nmysql_root_password: \"$MYSQL_ROOT_PASSWORD\"\nmysql_db_name: \"$MYSQL_DB_NAME\"\nmysql_db_user: \"$MYSQL_DB_USER\"\nmysql_db_password: \"$MYSQL_DB_PASSWORD\"\ndomain: \"$domain\"\nwordpress_admin_user: \"$WP_ADMIN_USER\"\nwordpress_admin_password: \"$WP_ADMIN_PASSWORD\"\nwordpress_admin_email: \"$WP_ADMIN_EMAIL\"\nwordpress_title: \"$WP_TITLE\"\nwordpress_locale: \"$WP_LOCALE\"\nwordpress_db_prefix: \"$WP_DB_PREFIX\"\nssl_email: \"$SSL_EMAIL\"\nphp_version: \"$PHP_VERSION\"\nlinux_username: \"$LINUX_USERNAME\"'"
 }
 
 # Security Settings
@@ -155,6 +141,13 @@ performance_settings() {
            "dynamic_caching" "Dynamic caching (e.g., Varnish)" off \
            "performance_report" "Performance report" off 2>"$TEMP_FILE"
     PERFORMANCE_OPTIONS=$(cat "$TEMP_FILE")
+
+    # WordPress Memory Limits
+    dialog --title "WordPress Memory Limits" --form "Set WordPress memory limits:" 10 60 2 \
+           "WP_MEMORY_LIMIT (e.g., 128M):" 1 1 "${WP_MEMORY_LIMIT:-128M}" 1 30 10 10 \
+           "WP_MAX_MEMORY_LIMIT (e.g., 256M):" 2 1 "${WP_MAX_MEMORY_LIMIT:-256M}" 2 30 10 10 \
+           2>"$TEMP_FILE"
+    IFS=$'\n' read -r -d '' WP_MEMORY_LIMIT WP_MAX_MEMORY_LIMIT < "$TEMP_FILE"
 
     if echo "$PERFORMANCE_OPTIONS" | grep -q "php_opcache"; then
         ENABLE_PHP_OPCACHE="true"
@@ -351,34 +344,28 @@ advanced_features() {
 
     if echo "$ADVANCED_OPTIONS" | grep -q "monitoring"; then
         ENABLE_MONITORING="true"
-        dialog --title "Monitoring" --yesno "Enable WP_DEBUG logging?" 10 50
-        WP_DEBUG=$([[ $? -eq 0 ]] && echo "true" || echo "false")
     else
         ENABLE_MONITORING="false"
-        WP_DEBUG="false"
     fi
 
-    ENABLE_IMAGE_OPTIMIZATION=$(echo "$ADVANCED_OPTIONS" | grep -q "image_optimization" && echo "true" || echo "false")
+    if echo "$ADVANCED_OPTIONS" | grep -q "image_optimization"; then
+        ENABLE_IMAGE_OPTIMIZATION="true"
+    else
+        ENABLE_IMAGE_OPTIMIZATION="false"
+    fi
 
     if echo "$ADVANCED_OPTIONS" | grep -q "add_wp_users"; then
-        ADD_WP_USERS="true"
-        dialog --title "WordPress Users" --inputbox "Enter users (username:role:email, comma-separated):" 10 50 "" 2>"$TEMP_FILE"
-        USERS=$(cat "$TEMP_FILE")
-        WP_USERS=""
-        for user in $(echo "$USERS" | tr ',' ' '); do
-            IFS=':' read -r username role email <<< "$user"
-            WP_USERS="$WP_USERS  - { username: \"$username\", role: \"$role\", email: \"$email\" }\n"
-        done
+        ENABLE_ADD_WP_USERS="true"
+        dialog --title "WordPress Users" --inputbox "Enter users (username:email:role, comma-separated):" 10 50 "" 2>"$TEMP_FILE"
+        WP_USERS=$(cat "$TEMP_FILE")
     else
-        ADD_WP_USERS="false"
+        ENABLE_ADD_WP_USERS="false"
         WP_USERS=""
     fi
-
-    ENABLE_AUTO_TEST=$(echo "$ADVANCED_OPTIONS" | grep -q "auto_test" && echo "true" || echo "false")
 
     if echo "$ADVANCED_OPTIONS" | grep -q "php_versions"; then
         ENABLE_PHP_VERSIONS="true"
-        dialog --title "PHP Versions" --inputbox "Enter additional PHP versions (e.g., 7.4,8.0):" 10 50 "" 2>"$TEMP_FILE"
+        dialog --title "PHP Versions" --inputbox "Enter additional PHP versions (comma-separated, e.g., 7.4,8.0):" 10 50 "" 2>"$TEMP_FILE"
         PHP_ADDITIONAL_VERSIONS=$(cat "$TEMP_FILE")
     else
         ENABLE_PHP_VERSIONS="false"
@@ -387,142 +374,229 @@ advanced_features() {
 
     if echo "$ADVANCED_OPTIONS" | grep -q "staging"; then
         ENABLE_STAGING="true"
-        dialog --title "Staging" --inputbox "Enter staging subdomain (e.g., staging):" 10 50 "" 2>"$TEMP_FILE"
+        dialog --title "Staging" --inputbox "Enter staging subdomain (default: staging):" 10 50 "staging" 2>"$TEMP_FILE"
         STAGING_SUBDOMAIN=$(cat "$TEMP_FILE")
     else
         ENABLE_STAGING="false"
         STAGING_SUBDOMAIN=""
     fi
 
+    ENABLE_AUTO_TEST=$(echo "$ADVANCED_OPTIONS" | grep -q "auto_test" && echo "true" || echo "false")
     ENABLE_HEADLESS_CMS=$(echo "$ADVANCED_OPTIONS" | grep -q "headless_cms" && echo "true" || echo "false")
     ENABLE_DEV_TOOLS=$(echo "$ADVANCED_OPTIONS" | grep -q "dev_tools" && echo "true" || echo "false")
-
-    if echo "$ADVANCED_OPTIONS" | grep -q "cloud_monitoring"; then
-        ENABLE_CLOUD_MONITORING="true"
-        dialog --title "Cloud Monitoring" --inputbox "Enter API key (e.g., UptimeRobot):" 10 50 "" 2>"$TEMP_FILE"
-        CLOUD_MONITORING_API_KEY=$(cat "$TEMP_FILE")
-    else
-        ENABLE_CLOUD_MONITORING="false"
-        CLOUD_MONITORING_API_KEY=""
-    fi
+    ENABLE_CLOUD_MONITORING=$(echo "$ADVANCED_OPTIONS" | grep -q "cloud_monitoring" && echo "true" || echo "false")
 }
 
 # Generate Configuration
 generate_config() {
-    cat <<EOF > "$OUTPUT_FILE"
----
-domains:
-EOF
+    echo "---" > "$OUTPUT_FILE"
+    echo "domains:" >> "$OUTPUT_FILE"
 
     for domain in $DOMAINS; do
-        eval "echo \"  $domain:\" >> \"$OUTPUT_FILE\""
-        eval "echo \"\${DOMAIN_${domain//./_}_SETTINGS}\" >> \"$OUTPUT_FILE\""
-        cat <<EOF >> "$OUTPUT_FILE"
-    restrict_ip_access: $RESTRICT_IP_ACCESS
-    allowed_ips:
-$ALLOWED_IPS
-    enable_basic_auth: $ENABLE_BASIC_AUTH
-    basic_auth_user: "$BASIC_AUTH_USER"
-    basic_auth_password: "$BASIC_AUTH_PASSWORD"
-    enable_ssh_security: $ENABLE_SSH_SECURITY
-    enable_anti_hack: $ENABLE_ANTI_HACK
-    enable_anti_bot: $ENABLE_ANTI_BOT
-    enable_anti_ddos: $ENABLE_ANTI_DDOS
-    enable_waf: $ENABLE_WAF
-    enable_login_limit: $ENABLE_LOGIN_LIMIT
-    enable_php_opcache: $ENABLE_PHP_OPCACHE
-    opcache_memory: "$OPCACHE_MEMORY"
-    install_redis: $INSTALL_REDIS
-    wp_redis_host: "$WP_REDIS_HOST"
-    wp_redis_port: "$WP_REDIS_PORT"
-    wp_redis_password: "$WP_REDIS_PASSWORD"
-    wp_redis_database: "$WP_REDIS_DATABASE"
-    enable_advanced_caching: $ENABLE_ADVANCED_CACHING
-    cache_type: "$CACHE_TYPE"
-    enable_cdn: $ENABLE_CDN
-    cdn_provider: "$CDN_PROVIDER"
-    cdn_api_key: "$CDN_API_KEY"
-    cdn_account: "$CDN_ACCOUNT"
-    enable_local_cdn: $ENABLE_LOCAL_CDN
-    local_cdn_provider: "$LOCAL_CDN_PROVIDER"
-    local_cdn_api_key: "$LOCAL_CDN_API_KEY"
-    enable_lazy_loading: $ENABLE_LAZY_LOADING
-    enable_browser_caching: $ENABLE_BROWSER_CACHING
-    enable_db_optimization: $ENABLE_DB_OPTIMIZATION
-    enable_quic_http3: $ENABLE_QUIC_HTTP3
-    enable_dynamic_caching: $ENABLE_DYNAMIC_CACHING
-    enable_performance_report: $ENABLE_PERFORMANCE_REPORT
-    install_plugins: $INSTALL_PLUGINS
-    plugins:
-$PLUGINS
-    enable_seo: $ENABLE_SEO
-    enable_woocommerce: $ENABLE_WOOCOMMERCE
-    enable_form_builder: $ENABLE_FORM_BUILDER
-    enable_plugin_categories: $ENABLE_PLUGIN_CATEGORIES
-    plugin_categories: "$PLUGIN_CATEGORIES"
-    enable_backups: $ENABLE_BACKUPS
-    backup_dir: "$BACKUP_DIR"
-    backup_freq: "$BACKUP_FREQ"
-    enable_advanced_backup: $ENABLE_ADVANCED_BACKUP
-    enable_migration: $ENABLE_MIGRATION
-    migration_db_path: "$MIGRATION_DB_PATH"
-    migration_files_path: "$MIGRATION_FILES_PATH"
-    enable_rollback: $ENABLE_ROLLBACK
-    enable_multisite: $ENABLE_MULTISITE
-    multisite_type: "$MULTISITE_TYPE"
-    enable_smtp: $ENABLE_SMTP
-    smtp_host: "$SMTP_HOST"
-    smtp_port: "$SMTP_PORT"
-    smtp_username: "$SMTP_USERNAME"
-    smtp_password: "$SMTP_PASSWORD"
-    enable_monitoring: $ENABLE_MONITORING
-    wp_debug: $WP_DEBUG
-    enable_image_optimization: $ENABLE_IMAGE_OPTIMIZATION
-    add_wp_users: $ADD_WP_USERS
-    wp_users:
-$WP_USERS
-    enable_auto_test: $ENABLE_AUTO_TEST
-    enable_php_versions: $ENABLE_PHP_VERSIONS
-    php_additional_versions: "$PHP_ADDITIONAL_VERSIONS"
-    enable_staging: $ENABLE_STAGING
-    staging_subdomain: "$STAGING_SUBDOMAIN"
-    enable_headless_cms: $ENABLE_HEADLESS_CMS
-    enable_dev_tools: $ENABLE_DEV_TOOLS
-    enable_cloud_monitoring: $ENABLE_CLOUD_MONITORING
-    cloud_monitoring_api_key: "$CLOUD_MONITORING_API_KEY"
-EOF
+        domain_var="DOMAIN_${domain//./_}_SETTINGS"
+        domain_settings=${!domain_var}
+
+        echo "  $domain:" >> "$OUTPUT_FILE"
+        echo -e "    $domain_settings" >> "$OUTPUT_FILE"
+
+        # Add security settings
+        echo "    restrict_ip_access: $RESTRICT_IP_ACCESS" >> "$OUTPUT_FILE"
+        if [ "$RESTRICT_IP_ACCESS" = "true" ]; then
+            echo "    allowed_ips:" >> "$OUTPUT_FILE"
+            echo -e "$ALLOWED_IPS" | sed 's/^/    /' >> "$OUTPUT_FILE"
+        else
+            echo "    allowed_ips: []" >> "$OUTPUT_FILE"
+        fi
+        echo "    enable_basic_auth: $ENABLE_BASIC_AUTH" >> "$OUTPUT_FILE"
+        if [ "$ENABLE_BASIC_AUTH" = "true" ]; then
+            echo "    basic_auth_user: \"$BASIC_AUTH_USER\"" >> "$OUTPUT_FILE"
+            echo "    basic_auth_password: \"$BASIC_AUTH_PASSWORD\"" >> "$OUTPUT_FILE"
+        fi
+
+        # Add memory limits
+        echo "    wp_memory_limit: \"$WP_MEMORY_LIMIT\"" >> "$OUTPUT_FILE"
+        echo "    wp_max_memory_limit: \"$WP_MAX_MEMORY_LIMIT\"" >> "$OUTPUT_FILE"
+
+        # Add Redis settings
+        echo "    install_redis: $INSTALL_REDIS" >> "$OUTPUT_FILE"
+        if [ "$INSTALL_REDIS" = "true" ]; then
+            echo "    wp_redis_host: \"$WP_REDIS_HOST\"" >> "$OUTPUT_FILE"
+            echo "    wp_redis_port: $WP_REDIS_PORT" >> "$OUTPUT_FILE"
+            echo "    wp_redis_password: \"$WP_REDIS_PASSWORD\"" >> "$OUTPUT_FILE"
+            echo "    wp_redis_database: $WP_REDIS_DATABASE" >> "$OUTPUT_FILE"
+        fi
+
+        # Add other performance settings
+        if [ "$ENABLE_PHP_OPCACHE" = "true" ]; then
+            echo "    enable_php_opcache: $ENABLE_PHP_OPCACHE" >> "$OUTPUT_FILE"
+            echo "    opcache_memory: $OPCACHE_MEMORY" >> "$OUTPUT_FILE"
+        fi
+
+        # Add advanced settings as needed
+        if [ "$ENABLE_ADVANCED_CACHING" = "true" ]; then
+            echo "    enable_advanced_caching: $ENABLE_ADVANCED_CACHING" >> "$OUTPUT_FILE"
+            echo "    cache_type: \"$CACHE_TYPE\"" >> "$OUTPUT_FILE"
+        fi
+
+        # Add other configuration options
+        if [ "$ENABLE_BACKUPS" = "true" ]; then
+            echo "    enable_backups: $ENABLE_BACKUPS" >> "$OUTPUT_FILE"
+            echo "    backup_dir: \"$BACKUP_DIR\"" >> "$OUTPUT_FILE"
+            echo "    backup_freq: \"$BACKUP_FREQ\"" >> "$OUTPUT_FILE"
+        fi
+
+        if [ "$ENABLE_STAGING" = "true" ]; then
+            echo "    enable_staging: $ENABLE_STAGING" >> "$OUTPUT_FILE"
+            echo "    staging_subdomain: \"$STAGING_SUBDOMAIN\"" >> "$OUTPUT_FILE"
+        fi
+
+        # Add other feature flags
+        echo "    enable_ssh_security: $ENABLE_SSH_SECURITY" >> "$OUTPUT_FILE"
+        echo "    enable_anti_hack: $ENABLE_ANTI_HACK" >> "$OUTPUT_FILE"
+        echo "    enable_anti_bot: $ENABLE_ANTI_BOT" >> "$OUTPUT_FILE"
+        echo "    enable_anti_ddos: $ENABLE_ANTI_DDOS" >> "$OUTPUT_FILE"
+        echo "    enable_waf: $ENABLE_WAF" >> "$OUTPUT_FILE"
+        echo "    enable_login_limit: $ENABLE_LOGIN_LIMIT" >> "$OUTPUT_FILE"
+        echo "    enable_lazy_loading: $ENABLE_LAZY_LOADING" >> "$OUTPUT_FILE"
+        echo "    enable_browser_caching: $ENABLE_BROWSER_CACHING" >> "$OUTPUT_FILE"
+        echo "    enable_db_optimization: $ENABLE_DB_OPTIMIZATION" >> "$OUTPUT_FILE"
+        echo "    enable_quic_http3: $ENABLE_QUIC_HTTP3" >> "$OUTPUT_FILE"
+        echo "    enable_dynamic_caching: $ENABLE_DYNAMIC_CACHING" >> "$OUTPUT_FILE"
+        echo "    enable_performance_report: $ENABLE_PERFORMANCE_REPORT" >> "$OUTPUT_FILE"
+        echo "    enable_monitoring: $ENABLE_MONITORING" >> "$OUTPUT_FILE"
+        echo "    enable_image_optimization: $ENABLE_IMAGE_OPTIMIZATION" >> "$OUTPUT_FILE"
+        echo "    enable_multisite: $ENABLE_MULTISITE" >> "$OUTPUT_FILE"
+        if [ "$ENABLE_MULTISITE" = "true" ]; then
+            echo "    multisite_type: \"$MULTISITE_TYPE\"" >> "$OUTPUT_FILE"
+        fi
+
+        # Add plugin settings
+        echo "    install_plugins: $INSTALL_PLUGINS" >> "$OUTPUT_FILE"
+        if [ "$INSTALL_PLUGINS" = "true" ]; then
+            echo "    plugins:" >> "$OUTPUT_FILE"
+            echo -e "$PLUGINS" | sed 's/^/    /' >> "$OUTPUT_FILE"
+        fi
+        echo "    enable_seo: $ENABLE_SEO" >> "$OUTPUT_FILE"
+        echo "    enable_woocommerce: $ENABLE_WOOCOMMERCE" >> "$OUTPUT_FILE"
+        echo "    enable_form_builder: $ENABLE_FORM_BUILDER" >> "$OUTPUT_FILE"
+
+        # Add advanced features
+        echo "    enable_smtp: $ENABLE_SMTP" >> "$OUTPUT_FILE"
+        if [ "$ENABLE_SMTP" = "true" ]; then
+            echo "    smtp_host: \"$SMTP_HOST\"" >> "$OUTPUT_FILE"
+            echo "    smtp_port: \"$SMTP_PORT\"" >> "$OUTPUT_FILE"
+            echo "    smtp_username: \"$SMTP_USERNAME\"" >> "$OUTPUT_FILE"
+            echo "    smtp_password: \"$SMTP_PASSWORD\"" >> "$OUTPUT_FILE"
+        fi
+
+        # Add migration settings
+        echo "    enable_migration: $ENABLE_MIGRATION" >> "$OUTPUT_FILE"
+        if [ "$ENABLE_MIGRATION" = "true" ]; then
+            echo "    migration_db_path: \"$MIGRATION_DB_PATH\"" >> "$OUTPUT_FILE"
+            echo "    migration_files_path: \"$MIGRATION_FILES_PATH\"" >> "$OUTPUT_FILE"
+        fi
+
+        # Add CDN settings
+        echo "    enable_cdn: $ENABLE_CDN" >> "$OUTPUT_FILE"
+        if [ "$ENABLE_CDN" = "true" ]; then
+            echo "    cdn_provider: \"$CDN_PROVIDER\"" >> "$OUTPUT_FILE"
+            echo "    cdn_api_key: \"$CDN_API_KEY\"" >> "$OUTPUT_FILE"
+            echo "    cdn_account: \"$CDN_ACCOUNT\"" >> "$OUTPUT_FILE"
+        fi
+
+        echo "    enable_local_cdn: $ENABLE_LOCAL_CDN" >> "$OUTPUT_FILE"
+        if [ "$ENABLE_LOCAL_CDN" = "true" ]; then
+                        echo "    local_cdn_provider: \"$LOCAL_CDN_PROVIDER\"" >> "$OUTPUT_FILE"
+            echo "    local_cdn_api_key: \"$LOCAL_CDN_API_KEY\"" >> "$OUTPUT_FILE"
+        fi
+
+        # Add WordPress users
+        echo "    enable_add_wp_users: $ENABLE_ADD_WP_USERS" >> "$OUTPUT_FILE"
+        if [ "$ENABLE_ADD_WP_USERS" = "true" ]; then
+            echo "    wp_users:" >> "$OUTPUT_FILE"
+            for user in $(echo "$WP_USERS" | tr ',' ' '); do
+                IFS=':' read -r username email role <<< "$user"
+                echo "      - { username: \"$username\", email: \"$email\", role: \"$role\" }" >> "$OUTPUT_FILE"
+            done
+        fi
+
+        # Add PHP versions
+        echo "    enable_php_versions: $ENABLE_PHP_VERSIONS" >> "$OUTPUT_FILE"
+        if [ "$ENABLE_PHP_VERSIONS" = "true" ]; then
+            echo "    php_additional_versions:" >> "$OUTPUT_FILE"
+            for version in $(echo "$PHP_ADDITIONAL_VERSIONS" | tr ',' ' '); do
+                echo "      - \"$version\"" >> "$OUTPUT_FILE"
+            done
+        fi
+
+        # Add other feature flags
+        echo "    enable_auto_test: $ENABLE_AUTO_TEST" >> "$OUTPUT_FILE"
+        echo "    enable_headless_cms: $ENABLE_HEADLESS_CMS" >> "$OUTPUT_FILE"
+        echo "    enable_dev_tools: $ENABLE_DEV_TOOLS" >> "$OUTPUT_FILE"
+        echo "    enable_cloud_monitoring: $ENABLE_CLOUD_MONITORING" >> "$OUTPUT_FILE"
+        echo "    enable_advanced_backup: $ENABLE_ADVANCED_BACKUP" >> "$OUTPUT_FILE"
+        echo "    enable_rollback: $ENABLE_ROLLBACK" >> "$OUTPUT_FILE"
+        echo "    enable_plugin_categories: $ENABLE_PLUGIN_CATEGORIES" >> "$OUTPUT_FILE"
+        if [ "$ENABLE_PLUGIN_CATEGORIES" = "true" ]; then
+            echo "    plugin_categories:" >> "$OUTPUT_FILE"
+            for category in $(echo "$PLUGIN_CATEGORIES" | tr ',' ' '); do
+                echo "      - \"$category\"" >> "$OUTPUT_FILE"
+            done
+        fi
+
+        echo "" >> "$OUTPUT_FILE"
     done
 
-    chmod 600 "$OUTPUT_FILE"
-    dialog --title "Configuration Generated" --msgbox "Configuration saved to $OUTPUT_FILE.\nCheck the file for generated passwords and save them securely!" 10 60
-
-    dialog --title "Encrypt File" --yesno "Encrypt with Ansible Vault?" 10 50
-    if [[ $? -eq 0 ]]; then
-        ansible-vault encrypt "$OUTPUT_FILE" && dialog --msgbox "File encrypted successfully." 10 50 || dialog --msgbox "Encryption failed." 10 50
-    fi
+    echo "Configuration generated successfully in $OUTPUT_FILE"
+    dialog --title "Configuration Generated" --msgbox "Configuration has been generated successfully in $OUTPUT_FILE" 8 50
 }
 
-# Main loop
+# Main execution flow
 while true; do
     main_menu
-    case "$CHOICE" in
-        1) domain_settings ;;
-        2) 
-           if [ -z "$DOMAINS" ]; then
-               dialog --msgbox "Please configure domains first!" 10 50
-           else
-               for domain in $DOMAINS; do
-                   basic_settings "$domain"
-               done
-           fi ;;
-        3) security_settings ;;
-        4) performance_settings ;;
-        5) plugins_themes ;;
-        6) backup_migration ;;
-        7) advanced_features ;;
-        8) generate_config; break ;;
-        *) break ;;
+    case $CHOICE in
+        1)
+            domain_settings
+            ;;
+        2)
+            if [ -z "$DOMAINS" ]; then
+                dialog --title "Error" --msgbox "Please configure domains first." 8 40
+                continue
+            fi
+            for domain in $DOMAINS; do
+                basic_settings "$domain"
+            done
+            ;;
+        3)
+            security_settings
+            ;;
+        4)
+            performance_settings
+            ;;
+        5)
+            plugins_themes
+            ;;
+        6)
+            backup_migration
+            ;;
+        7)
+            advanced_features
+            ;;
+        8)
+            if [ -z "$DOMAINS" ]; then
+                dialog --title "Error" --msgbox "Please configure domains first." 8 40
+                continue
+            fi
+            generate_config
+            break
+            ;;
+        *)
+            break
+            ;;
     esac
 done
 
-echo "Setup complete! Run Ansible playbooks to deploy."
+cleanup
+exit 0
+
+            

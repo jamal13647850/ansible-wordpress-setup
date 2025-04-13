@@ -15,6 +15,24 @@ define('SECURE_AUTH_SALT', '{{ lookup("password", "/dev/null length=64") }}');
 define('LOGGED_IN_SALT',   '{{ lookup("password", "/dev/null length=64") }}');
 define('NONCE_SALT',       '{{ lookup("password", "/dev/null length=64") }}');
 define('WP_DEBUG', {{ wp_debug | default('false') }});
+
+/* Security settings */
+define('FORCE_SSL_LOGIN', true);
+define('FORCE_SSL_ADMIN', true);
+define('DISALLOW_FILE_EDIT', true);
+
+/* Performance settings */
+define('FS_METHOD', 'direct');
+define('DISABLE_WP_CRON', true);
+
+/* Memory limits */
+{% if wp_memory_limit is defined and wp_memory_limit != "" %}
+define('WP_MEMORY_LIMIT', '{{ wp_memory_limit }}');
+{% endif %}
+{% if wp_max_memory_limit is defined and wp_max_memory_limit != "" %}
+define('WP_MAX_MEMORY_LIMIT', '{{ wp_max_memory_limit }}');
+{% endif %}
+
 {% if install_redis %}
 define('WP_REDIS_HOST', '{{ wp_redis_host }}');
 define('WP_REDIS_PORT', {{ wp_redis_port }});
