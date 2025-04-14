@@ -767,7 +767,7 @@ generate_config() {
         echo "    enable_smtp: $ENABLE_SMTP" >> "$OUTPUT_FILE"
         if [ "$ENABLE_SMTP" = "true" ]; then
             echo "    smtp_host: \"$SMTP_HOST\"" >> "$OUTPUT_FILE"
-            echo "    smtp_port: \"$SMTP_PORT\"" >> "$OUTPUT_FILE"
+            echo "    smtp_port: $SMTP_PORT" >> "$OUTPUT_FILE"
             echo "    smtp_username: \"$SMTP_USERNAME\"" >> "$OUTPUT_FILE"
             echo "    smtp_password: \"$SMTP_PASSWORD\"" >> "$OUTPUT_FILE"
         fi
@@ -775,7 +775,10 @@ generate_config() {
         echo "    enable_monitoring: $ENABLE_MONITORING" >> "$OUTPUT_FILE"
         echo "    enable_php_versions: $ENABLE_PHP_VERSIONS" >> "$OUTPUT_FILE"
         if [ "$ENABLE_PHP_VERSIONS" = "true" ]; then
-            echo "    php_additional_versions: \"$PHP_ADDITIONAL_VERSIONS\"" >> "$OUTPUT_FILE"
+            echo "    php_additional_versions:" >> "$OUTPUT_FILE"
+            for version in $(echo "$PHP_ADDITIONAL_VERSIONS" | tr ',' ' '); do
+                echo "      - \"$version\"" >> "$OUTPUT_FILE"
+            done
         fi
         
         echo "    enable_staging: $ENABLE_STAGING" >> "$OUTPUT_FILE"
@@ -786,61 +789,105 @@ generate_config() {
         echo "    enable_auto_test: $ENABLE_AUTO_TEST" >> "$OUTPUT_FILE"
         echo "    enable_dev_tools: $ENABLE_DEV_TOOLS" >> "$OUTPUT_FILE"
         echo "    enable_cloud_monitoring: $ENABLE_CLOUD_MONITORING" >> "$OUTPUT_FILE"
-        
-        echo "" >> "$OUTPUT_FILE"
     done
     
-    echo "Configuration generated successfully in $OUTPUT_FILE"
-    dialog --title "Configuration Generated" --msgbox "Configuration has been generated successfully in $OUTPUT_FILE" 8 50
+    dialog --title "Configuration Generated" --msgbox "Configuration has been saved to $OUTPUT_FILE" 8 50
 }
 
-# Main execution flow
+# Main execution
 platform_selection
 
 while true; do
     main_menu
+    
     case $CHOICE in
-        1)
-            domain_settings
-            ;;
-        2)
-            if [ -z "$DOMAINS" ]; then
-                dialog --title "Error" --msgbox "Please configure domains first." 8 40
-                continue
-            fi
-            for domain in $DOMAINS; do
-                basic_settings "$domain"
-            done
-            ;;
-        3)
-            security_settings
-            ;;
-        4)
-            performance_settings
-            ;;
-        5)
-            plugins_themes
-            ;;
-        6)
-            backup_migration
-            ;;
-        7)
-            advanced_features
-            ;;
-        8)
-            if [ -z "$DOMAINS" ]; then
-                dialog --title "Error" --msgbox "Please configure domains first." 8 40
-                continue
-            fi
-            generate_config
-            break
-            ;;
-        *)
-            break
-            ;;
+        1) domain_settings ;;
+        2) for domain in $DOMAINS; do basic_settings "$domain"; done ;;
+        3) security_settings ;;
+        4) performance_settings ;;
+        5) plugins_themes ;;
+        6) backup_migration ;;
+        7) advanced_features ;;
+        8) generate_config; break ;;
+        *) echo "Invalid selection. Exiting."; exit 1 ;;
     esac
 done
 
-cleanup
-exit 0
+echo "Configuration generated successfully in $OUTPUT_FILE"
+
+# Clean up temporary files
+rm -f "$TEMP_FILE"
+
+# Display a summary of the configuration
+echo "Configuration Summary:"
+echo "======================"
+echo "Platform: $PLATFORM"
+echo "Domains: $DOMAINS"
+
+for domain in $DOMAINS; do
+    echo "Domain: $domain"
+    domain_var="DOMAIN_${domain//./_}_SETTINGS"
+    domain_settings=${!domain_var}
+    echo "  Settings: $domain_settings"
+    
+    if [ "$ENABLE_BACKUPS" = "true" ]; then
+        echo "  Backups: Enabled (Frequency: $BACKUP_FREQ)"
+    else
+        echo "  Backups: Disabled"
+    fi
+    
+    if [ "$PLATFORM" == "wordpress" ]; then
+        if [ "$INSTALL_PLUGINS" = "true" ]; then
+            echo "  WordPress Plugins: Enabled"
+        else
+            echo "  WordPress Plugins: Disabled"
+        fi
+        
+        if [ "$ENABLE_MULTISITE" = "true" ]; then
+            echo "  WordPress Multisite: Enabled ($MULTISITE_TYPE)"
+        else
+            echo "  WordPress Multisite: Disabled"
+        fi
+    fi
+    
+    if [ "$PLATFORM" == "laravel" ]; then
+        if [ "$ENABLE_API" = "true" ]; then
+            echo "  Laravel API: Enabled"
+        else
+            echo "  Laravel API: Disabled"
+        fi
+        
+        if [ "$ENABLE_QUEUE" = "true" ]; then
+            echo "  Laravel Queue: Enabled ($QUEUE_DRIVER)"
+        else
+            echo "  Laravel Queue: Disabled"
+        fi
+    fi
+    
+    if [ "$INSTALL_REDIS" = "true" ]; then
+        echo "  Redis: Enabled"
+    else
+        echo "  Redis: Disabled"
+    fi
+    
+    if [ "$ENABLE_CDN" = "true" ]; then
+        echo "  CDN: Enabled ($CDN_PROVIDER)"
+    else
+        echo "  CDN: Disabled"
+    fi
+    
+    if [ "$ENABLE_STAGING" = "true" ]; then
+        echo "  Staging: Enabled (Subdomain: $STAGING_SUBDOMAIN)"
+    else
+        echo "  Staging: Disabled"
+    fi
+done
+
+echo "======================"
+echo "Configuration file has been saved to: $OUTPUT_FILE"
+echo "Use this file with your deployment system."
+echo "Thank you for using the Web Platform Configuration Generator!"
+
+
+
 
