@@ -1,0 +1,54 @@
+# site.yml
+# WordPress Playbooks
+- name: Import WordPress update-upgrade playbook
+  import_playbook: 00-update-upgrade.yml
+  when: platform == "wordpress"
+
+- name: Import WordPress MySQL playbook
+  import_playbook: 01-install-mysql.yml
+  when: platform == "wordpress"
+
+- name: Import WordPress Nginx playbook
+  import_playbook: 02-install-nginx.yml
+  when: platform == "wordpress"
+
+- name: Import WordPress PHP/Composer/WP-CLI playbook
+  import_playbook: 03-install-php-composer-wpcli.yml
+  when: platform == "wordpress"
+
+- name: Import WordPress installation playbook
+  import_playbook: 04-install-wordpress.yml
+  when: platform == "wordpress"
+
+- name: Import WordPress SSL playbook
+  import_playbook: 05-obtain-ssl.yml
+  when: platform == "wordpress"
+
+# Laravel Playbooks
+- name: Import Laravel update-upgrade playbook
+  import_playbook: 00-update-upgrade.yml
+  when: platform == "laravel"
+
+- name: Import Laravel MySQL playbook
+  import_playbook: 01-install-mysql.yml
+  when: platform == "laravel"
+
+- name: Import Laravel Nginx playbook
+  import_playbook: 02-install-nginx.yml
+  when: platform == "laravel"
+
+- name: Import Laravel PHP/Composer/WP-CLI playbook
+  import_playbook: 03-install-php-composer-wpcli.yml
+  when: platform == "laravel"
+
+- name: Import Laravel installation playbook
+  import_playbook: laravel/01-install-laravel.yml
+  when: platform == "laravel"
+
+- name: Import Laravel SSL playbook
+  import_playbook: 05-obtain-ssl.yml
+  when: platform == "laravel"
+
+- name: Import Laravel configuration playbook
+  import_playbook: laravel/02-configure-laravel.yml
+  when: platform == "laravel"

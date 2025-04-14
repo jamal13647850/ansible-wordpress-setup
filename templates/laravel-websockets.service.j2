@@ -1,0 +1,14 @@
+# templates/laravel-websockets.service.j2
+[Unit]
+Description=Laravel WebSockets for {{ domain_config.domain }}
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+Restart=always
+ExecStart=/usr/bin/php /var/www/{{ domain_config.domain }}/html/artisan websockets:serve
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

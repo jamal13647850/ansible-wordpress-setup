@@ -1,0 +1,64 @@
+---
+# laravel/07-laravel-websockets.yml
+- hosts: all
+  become: true
+  tasks:
+    - name: Install Laravel WebSockets
+      become: yes
+      become_user: www-data
+      shell: |
+        cd /var/www/{{ domain_config.domain }}/html
+        composer require beyondcode/laravel-websockets
+      when: domain_config.enable_websockets | default(false) | bool
+    
+    - name: Publish WebSockets configuration
+      become: yes
+      become_user: www-data
+      shell: |
+        cd /var/www/{{ domain_config.domain }}/html
+        php artisan vendor:publish --provider="BeyondCode\LaravelWebSockets\WebSocketsServiceProvider" --tag="config"
+        php artisan vendor:publish --provider="BeyondCode\LaravelWebSockets\WebSocketsServiceProvider" --tag="migrations"
+        php artisan migrate
+      when: domain_config.enable_websockets | default(false) | bool
+    
+    - name: Create Laravel WebSockets systemd service
+      template:
+        src: templates/laravel-websockets.service.j2
+        dest: "/etc/systemd/system/laravel-websockets-{{ domain_config.domain | replace('.', '-') }}.service"
+        mode: '0644'
+      when: domain_config.enable_websockets | default(false) | bool
+    
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+      when: domain_config.enable_websockets | default(false) | bool
+    
+    - name: Enable and start Laravel WebSockets
+      systemd:
+        name: "laravel-websockets-{{ domain_config.domain | replace('.', '-') }}"
+        state: started
+        enabled: yes
+      when: domain_config.enable_websockets | default(false) | bool
+    
+    - name: Configure Nginx for WebSockets
+      template:
+        src: templates/laravel-websockets-nginx.conf.j2
+        dest: "/etc/nginx/sites-available/{{ domain_config.domain }}-websockets.conf"
+        mode: '0644'
+      when: domain_config.enable_websockets | default(false) | bool
+      notify: Restart Nginx
+    
+    - name: Enable WebSockets Nginx site
+      file:
+        src: "/etc/nginx/sites-available/{{ domain_config.domain }}-websockets.conf"
+        dest: "/etc/nginx/sites-enabled/{{ domain_config.domain }}-websockets.conf"
+        state: link
+      when: domain_config.enable_websockets | default(false) | bool
+      notify: Restart Nginx
+  
+  handlers:
+    - name: Restart Nginx
+      service:
+        name: nginx
+        state: restarted
+

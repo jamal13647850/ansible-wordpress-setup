@@ -1,0 +1,68 @@
+---
+# laravel/01-install-laravel.yml
+- hosts: all
+  become: true
+  tasks:
+    - name: Ensure required variables are defined
+      fail:
+        msg: "Required variable '{{ item }}' is not defined."
+      when: domain_config[item] is not defined
+      loop:
+        - domain
+        - laravel_app_name
+        - laravel_app_env
+        - laravel_admin_email
+        - mysql_db_name
+        - mysql_db_user
+        - mysql_db_password
+        - php_version
+    
+    - name: Create Laravel directory
+      file:
+        path: "/var/www/{{ domain_config.domain }}/html"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+    
+    - name: Create Laravel logs directory
+      file:
+        path: "/var/www/{{ domain_config.domain }}/logs"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+    
+    - name: Install Composer globally
+      shell: curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+      args:
+        creates: /usr/local/bin/composer
+    
+    - name: Create Laravel project via Composer
+      become: yes
+      become_user: www-data
+      shell: |
+        cd /var/www/{{ domain_config.domain }}/html
+        composer create-project --prefer-dist laravel/laravel . "{{ domain_config.laravel_version|default('10.*') }}"
+      args:
+        creates: "/var/www/{{ domain_config.domain }}/html/artisan"
+    
+    - name: Set proper permissions
+      file:
+        path: "/var/www/{{ domain_config.domain }}/html"
+        owner: www-data
+        group: www-data
+        recurse: yes
+        mode: u=rwX,g=rX,o=rX
+    
+    - name: Set storage and bootstrap/cache directories as writable
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0775'
+        recurse: yes
+      with_items:
+        - "/var/www/{{ domain_config.domain }}/html/storage"
+        - "/var/www/{{ domain_config.domain }}/html/bootstrap/cache"

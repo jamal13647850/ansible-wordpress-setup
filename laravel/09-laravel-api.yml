@@ -1,0 +1,145 @@
+---
+# laravel/09-laravel-api.yml
+- hosts: all
+  become: true
+  tasks:
+    - name: Install Laravel Sanctum for API authentication
+      become: yes
+      become_user: www-data
+      shell: |
+        cd /var/www/{{ domain_config.domain }}/html
+        composer require laravel/sanctum
+        php artisan vendor:publish --provider="Laravel\Sanctum\SanctumServiceProvider"
+        php artisan migrate
+      when: 
+        - domain_config.enable_api | default(false) | bool
+        - domain_config.enable_api_auth | default(false) | bool
+    
+    - name: Install API documentation package (Scribe)
+      become: yes
+      become_user: www-data
+      shell: |
+        cd /var/www/{{ domain_config.domain }}/html
+        composer require knuckleswtf/scribe
+        php artisan vendor:publish --provider="Knuckles\Scribe\ScribeServiceProvider" --tag="config"
+      when: 
+        - domain_config.enable_api | default(false) | bool
+        - domain_config.enable_api_docs | default(false) | bool
+    
+    - name: Create basic API controller
+      copy:
+        dest: "/var/www/{{ domain_config.domain }}/html/app/Http/Controllers/Api/ApiController.php"
+        content: |
+          <?php
+          
+          namespace App\Http\Controllers\Api;
+          
+          use App\Http\Controllers\Controller;
+          use Illuminate\Http\Request;
+          
+          class ApiController extends Controller
+          {
+              /**
+               * @OA\Info(
+               *     title="{{ domain_config.laravel_app_name }} API",
+               *     version="1.0.0",
+               *     description="API Documentation for {{ domain_config.laravel_app_name }}",
+               *     @OA\Contact(
+               *         email="{{ domain_config.laravel_admin_email }}"
+               *     )
+               * )
+               */
+              
+              /**
+               * Get API status
+               * 
+               * @OA\Get(
+               *     path="/api/status",
+               *     tags={"Status"},
+               *     summary="Get API status",
+               *     @OA\Response(
+               *         response=200,
+               *         description="Success",
+               *         @OA\JsonContent(
+               *             @OA\Property(property="status", type="string", example="online"),
+               *             @OA\Property(property="version", type="string", example="1.0.0"),
+               *             @OA\Property(property="server_time", type="string", format="date-time")
+               *         )
+               *     )
+               * )
+               */
+              public function status()
+              {
+                  return response()->json([
+                      'status' => 'online',
+                      'version' => '1.0.0',
+                      'server_time' => now()->toIso8601String()
+                  ]);
+              }
+          }
+        owner: www-data
+        group: www-data
+        mode: '0644'
+      when: domain_config.enable_api | default(false) | bool
+    
+    - name: Create API routes file
+      copy:
+        dest: "/var/www/{{ domain_config.domain }}/html/routes/api.php"
+        content: |
+          <?php
+          
+          use Illuminate\Http\Request;
+          use Illuminate\Support\Facades\Route;
+          use App\Http\Controllers\Api\ApiController;
+          
+          /*
+          |--------------------------------------------------------------------------
+          | API Routes
+          |--------------------------------------------------------------------------
+          |
+          | Here is where you can register API routes for your application. These
+          | routes are loaded by the RouteServiceProvider within a group which
+          | is assigned the "api" middleware group. Enjoy building your API!
+          |
+          */
+          
+          Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
+              return $request->user();
+          });
+          
+          Route::get('/status', [ApiController::class, 'status']);
+          
+          {% if domain_config.enable_api_versioning | default(false) %}
+          // API Versioning
+          Route::prefix('v1')->group(function () {
+              Route::get('/status', [ApiController::class, 'status']);
+          });
+          {% endif %}
+          
+          {% if domain_config.enable_api_rate_limit | default(false) %}
+          // Rate limited routes
+          Route::middleware(['throttle:api'])->group(function () {
+              // Add rate-limited routes here
+          });
+          {% endif %}
+        owner: www-data
+        group: www-data
+        mode: '0644'
+      when: domain_config.enable_api | default(false) | bool
+    
+    - name: Update CORS configuration for API
+      lineinfile:
+        path: "/var/www/{{ domain_config.domain }}/html/config/cors.php"
+        regexp: "    'paths' => \\['api/\\*'\\],"
+        line: "    'paths' => ['api/*', 'sanctum/csrf-cookie'],"
+      when: domain_config.enable_api | default(false) | bool
+    
+    - name: Generate API documentation
+      become: yes
+      become_user: www-data
+      shell: |
+        cd /var/www/{{ domain_config.domain }}/html
+        php artisan scribe:generate
+      when: 
+        - domain_config.enable_api | default(false) | bool
+        - domain_config.enable_api_docs | default(false) | bool

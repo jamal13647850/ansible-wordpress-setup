@@ -1,0 +1,80 @@
+---
+# laravel/06-laravel-octane.yml
+- hosts: all
+  become: true
+  tasks:
+    - name: Install required packages for Swoole
+      apt:
+        name:
+          - libssl-dev
+          - openssl
+        state: present
+      when: 
+        - domain_config.enable_octane | default(false) | bool
+        - domain_config.octane_server | default('swoole') == 'swoole'
+    
+    - name: Install Swoole PHP extension
+      shell: |
+        pecl install swoole
+        echo "extension=swoole.so" > /etc/php/{{ domain_config.php_version }}/mods-available/swoole.ini
+        phpenmod swoole
+      args:
+        creates: /etc/php/{{ domain_config.php_version }}/mods-available/swoole.ini
+      when: 
+        - domain_config.enable_octane | default(false) | bool
+        - domain_config.octane_server | default('swoole') == 'swoole'
+      notify: Restart PHP-FPM
+    
+    - name: Install Laravel Octane
+      become: yes
+      become_user: www-data
+      shell: |
+        cd /var/www/{{ domain_config.domain }}/html
+        composer require laravel/octane
+      when: domain_config.enable_octane | default(false) | bool
+    
+    - name: Install Octane with selected server
+      become: yes
+      become_user: www-data
+      shell: |
+        cd /var/www/{{ domain_config.domain }}/html
+        php artisan octane:install --server={{ domain_config.octane_server | default('swoole') }}
+      when: domain_config.enable_octane | default(false) | bool
+    
+    - name: Create Laravel Octane systemd service
+      template:
+        src: templates/laravel-octane.service.j2
+        dest: "/etc/systemd/system/laravel-octane-{{ domain_config.domain | replace('.', '-') }}.service"
+        mode: '0644'
+      when: domain_config.enable_octane | default(false) | bool
+    
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+      when: domain_config.enable_octane | default(false) | bool
+    
+    - name: Enable and start Laravel Octane
+      systemd:
+        name: "laravel-octane-{{ domain_config.domain | replace('.', '-') }}"
+        state: started
+        enabled: yes
+      when: domain_config.enable_octane | default(false) | bool
+    
+    - name: Configure Nginx for Octane
+      template:
+        src: templates/laravel-octane-nginx.conf.j2
+        dest: "/etc/nginx/sites-available/{{ domain_config.domain }}.conf"
+        mode: '0644'
+      when: domain_config.enable_octane | default(false) | bool
+      notify: Restart Nginx
+  
+  handlers:
+    - name: Restart PHP-FPM
+      service:
+        name: "php{{ domain_config.php_version }}-fpm"
+        state: restarted
+    
+    - name: Restart Nginx
+      service:
+        name: nginx
+        state: restarted

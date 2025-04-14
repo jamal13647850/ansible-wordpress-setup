@@ -1,0 +1,13 @@
+---
+# laravel/03-laravel-scheduler.yml
+- hosts: all
+  become: true
+  tasks:
+    - name: Set up Laravel scheduler cron job
+      cron:
+        name: "Laravel Scheduler for {{ domain_config.domain }}"
+        minute: "*"
+        job: "cd /var/www/{{ domain_config.domain }}/html && php artisan schedule:run >> /dev/null 2>&1"
+        user: www-data
+        state: present
+      when: domain_config.enable_scheduler | default(false) | bool

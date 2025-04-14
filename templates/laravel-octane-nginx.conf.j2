@@ -1,0 +1,81 @@
+# templates/laravel-octane-nginx.conf.j2
+{% for domain_name, config in domains.items() %}
+# HTTP Server (redirects to HTTPS if SSL is enabled)
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ config.domain }} www.{{ config.domain }}{% if config.extra_domains is defined %} {% for extra_domain in config.extra_domains %}{{ extra_domain }} www.{{ extra_domain }}{% endfor %}{% endif %};
+
+    {% if config.ssl_email is defined and config.ssl_email != "" %}
+    # Redirect all HTTP traffic to HTTPS
+    return 301 https://$host$request_uri;
+    {% else %}
+    access_log /var/www/{{ config.domain }}/logs/access.log;
+    error_log /var/www/{{ config.domain }}/logs/error.log warn;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    {% endif %}
+}
+
+# HTTPS Server (if SSL is enabled)
+{% if config.ssl_email is defined and config.ssl_email != "" %}
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name {{ config.domain }} www.{{ config.domain }}{% if config.extra_domains is defined %} {% for extra_domain in config.extra_domains %}{{ extra_domain }} www.{{ extra_domain }}{% endfor %}{% endif %};
+
+    # SSL Configuration
+    ssl_certificate /etc/letsencrypt/live/{{ config.domain }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ config.domain }}/privkey.pem;
+    ssl_trusted_certificate /etc/letsencrypt/live/{{ config.domain }}/chain.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_ciphers EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    resolver 8.8.8.8 8.8.4.4 valid=300s;
+    resolver_timeout 5s;
+
+    # Logs
+    access_log /var/www/{{ config.domain }}/logs/access.log;
+    error_log /var/www/{{ config.domain }}/logs/error.log warn;
+
+    # Performance optimizations
+    client_max_body_size 10M;
+    proxy_read_timeout 700;
+    proxy_connect_timeout 700;
+    proxy_send_timeout 700;
+
+    # Octane proxy configuration
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+    # Deny access to hidden files
+    location ~ /\. {
+        deny all;
+    }
+
+    # Deny access to sensitive Laravel files
+    location ~ ^/(app|bootstrap|config|database|resources|routes|storage|tests|artisan) {
+        deny all;
+    }
+}
+{% endif %}
+{% endfor %}

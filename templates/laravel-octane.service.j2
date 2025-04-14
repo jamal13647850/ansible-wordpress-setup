@@ -1,0 +1,14 @@
+# templates/laravel-octane.service.j2
+[Unit]
+Description=Laravel Octane for {{ domain_config.domain }}
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+Restart=always
+ExecStart=/usr/bin/php /var/www/{{ domain_config.domain }}/html/artisan octane:start --server={{ domain_config.octane_server | default('swoole') }} --host=127.0.0.1 --port=8000
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

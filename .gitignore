@@ -1,2 +1,4 @@
 .vscode
-repomix-output.txt
+*.txt
+
+repomix.config.json

@@ -1,0 +1,35 @@
+---
+# laravel/08-laravel-telescope.yml
+- hosts: all
+  become: true
+  tasks:
+    - name: Install Laravel Telescope
+      become: yes
+      become_user: www-data
+      shell: |
+        cd /var/www/{{ domain_config.domain }}/html
+        composer require laravel/telescope --dev
+      when: domain_config.enable_telescope | default(false) | bool
+    
+    - name: Publish Telescope configuration
+      become: yes
+      become_user: www-data
+      shell: |
+        cd /var/www/{{ domain_config.domain }}/html
+        php artisan telescope:install
+        php artisan migrate
+      when: domain_config.enable_telescope | default(false) | bool
+    
+    - name: Configure Telescope access
+      lineinfile:
+        path: "/var/www/{{ domain_config.domain }}/html/app/Providers/TelescopeServiceProvider.php"
+        regexp: "        Gate::define\\('viewTelescope', function \\(\\$user\\) \\{"
+        line: "        Gate::define('viewTelescope', function ($user = null) {"
+      when: domain_config.enable_telescope | default(false) | bool
+    
+    - name: Configure Telescope to allow access in production
+      lineinfile:
+        path: "/var/www/{{ domain_config.domain }}/html/app/Providers/TelescopeServiceProvider.php"
+        regexp: "            return \\$user->email === 'taylor@laravel.com';"
+        line: "            return true; // Allow all access for now, restrict in production"
+      when: domain_config.enable_telescope | default(false) | bool

@@ -1,0 +1,72 @@
+---
+- hosts: all
+  become: true
+  tasks:
+    - name: Install security audit tools
+      apt:
+        name:
+          - lynis
+          - rkhunter
+        state: present
+      when: security_audit | default(true) | bool
+
+    - name: Set up security audit cron job
+      cron:
+        name: "Security audit for WordPress sites"
+        minute: "0"
+        hour: "3"
+        day: "*"
+        month: "*"
+        weekday: "0"
+        job: "lynis audit system --cronjob > /var/log/lynis-audit.log 2>&1 && rkhunter --update && rkhunter --check --skip-keypress --report-warnings-only > /var/log/rkhunter-check.log 2>&1"
+        user: root
+        state: present
+      when: security_audit | default(true) | bool
+
+    - name: Create WordPress security scan script
+      copy:
+        dest: /usr/local/bin/wp-security-scan.sh
+        content: |
+          #!/bin/bash
+          # WordPress Security Scanner
+          
+          for domain in $(ls -d /var/www/*/); do
+            domain=$(basename "$domain")
+            if [ -d "/var/www/$domain/html" ]; then
+              echo "Scanning $domain..."
+              cd "/var/www/$domain/html" || continue
+              
+              # Check file permissions
+              echo "Checking file permissions..."
+              find . -type f -name "*.php" -perm /o+w -ls
+              
+              # Check for suspicious files
+              echo "Checking for suspicious files..."
+              find . -name "*.php" -type f -exec grep -l "eval(" {} \; 
+              find . -name "*.php" -type f -exec grep -l "base64_decode" {} \;
+              
+              # Check WordPress core integrity
+              if command -v wp &> /dev/null; then
+                echo "Checking WordPress core integrity..."
+                wp core verify-checksums --allow-root
+              fi
+              
+              echo "Scan completed for $domain"
+              echo "----------------------------------------"
+            fi
+          done
+        mode: '0755'
+      when: security_audit | default(true) | bool
+
+    - name: Set up WordPress security scan cron job
+      cron:
+        name: "WordPress security scan"
+        minute: "0"
+        hour: "4"
+        day: "*"
+        month: "*"
+        weekday: "1"
+        job: "/usr/local/bin/wp-security-scan.sh > /var/log/wp-security-scan.log 2>&1"
+        user: root
+        state: present
+      when: security_audit | default(true) | bool

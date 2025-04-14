@@ -1,0 +1,40 @@
+---
+# laravel/05-laravel-horizon.yml
+- hosts: all
+  become: true
+  tasks:
+    - name: Install Laravel Horizon
+      become: yes
+      become_user: www-data
+      shell: |
+        cd /var/www/{{ domain_config.domain }}/html
+        composer require laravel/horizon
+      when: domain_config.enable_horizon | default(false) | bool
+    
+    - name: Publish Horizon configuration
+      become: yes
+      become_user: www-data
+      shell: |
+        cd /var/www/{{ domain_config.domain }}/html
+        php artisan horizon:install
+        php artisan vendor:publish --provider="Laravel\Horizon\HorizonServiceProvider"
+      when: domain_config.enable_horizon | default(false) | bool
+    
+    - name: Create Laravel Horizon systemd service
+      template:
+        src: templates/laravel-horizon.service.j2
+        dest: "/etc/systemd/system/laravel-horizon-{{ domain_config.domain | replace('.', '-') }}.service"
+        mode: '0644'
+      when: domain_config.enable_horizon | default(false) | bool
+    
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+      when: domain_config.enable_horizon | default(false) | bool
+    
+    - name: Enable and start Laravel Horizon
+      systemd:
+        name: "laravel-horizon-{{ domain_config.domain | replace('.', '-') }}"
+        state: started
+        enabled: yes
+      when: domain_config.enable_horizon | default(false) | bool

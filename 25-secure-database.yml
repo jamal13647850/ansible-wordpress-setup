@@ -1,0 +1,57 @@
+---
+- hosts: all
+  become: true
+  tasks:
+    - name: Create MySQL secure user for each domain
+      mysql_user:
+        name: "{{ item.value.mysql_db_user }}_secure"
+        password: "{{ item.value.mysql_db_password }}"
+        priv: "{{ item.value.mysql_db_name }}.*:SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,ALTER"
+        host: localhost
+        state: present
+      with_dict: "{{ domains }}"
+      when: secure_database | default(true) | bool
+
+    - name: Remove MySQL history file
+      file:
+        path: ~/.mysql_history
+        state: absent
+      when: secure_database | default(true) | bool
+
+    - name: Create symbolic link for MySQL history to /dev/null
+      file:
+        src: /dev/null
+        dest: ~/.mysql_history
+        state: link
+        force: yes
+      when: secure_database | default(true) | bool
+
+    - name: Secure MySQL configuration
+      blockinfile:
+        path: /etc/mysql/mysql.conf.d/mysqld.cnf
+        block: |
+          # Security settings
+          local-infile=0
+          skip-show-database
+          secure-file-priv=/var/lib/mysql-files
+        insertafter: "[mysqld]"
+      notify: Restart MySQL
+      when: secure_database | default(true) | bool
+
+    - name: Add MySQL security options to wp-config.php
+      blockinfile:
+        path: "/var/www/{{ item.key }}/html/wp-config.php"
+        block: |
+          // Database security settings
+          define('CUSTOM_USER_TABLE', $table_prefix . 'users');
+          define('CUSTOM_USER_META_TABLE', $table_prefix . 'usermeta');
+        insertbefore: "/* That's all, stop editing! Happy publishing. */"
+      with_dict: "{{ domains }}"
+      when: secure_database | default(true) | bool
+
+  handlers:
+    - name: Restart MySQL
+      service:
+        name: mysql
+        state: restarted
+      when: secure_database | default(true) | bool

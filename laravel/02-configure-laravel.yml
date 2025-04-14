@@ -1,0 +1,90 @@
+---
+# laravel/02-configure-laravel.yml
+- hosts: all
+  become: true
+  tasks:
+    - name: Copy .env.example to .env
+      copy:
+        src: "/var/www/{{ domain_config.domain }}/html/.env.example"
+        dest: "/var/www/{{ domain_config.domain }}/html/.env"
+        remote_src: yes
+        owner: www-data
+        group: www-data
+        mode: '0644'
+      
+    - name: Configure Laravel environment variables
+      lineinfile:
+        path: "/var/www/{{ domain_config.domain }}/html/.env"
+        regexp: "^{{ item.key }}="
+        line: "{{ item.key }}={{ item.value }}"
+      with_items:
+        - { key: "APP_NAME", value: "\"{{ domain_config.laravel_app_name }}\"" }
+        - { key: "APP_ENV", value: "{{ domain_config.laravel_app_env }}" }
+        - { key: "APP_DEBUG", value: "{{ 'true' if domain_config.laravel_app_env == 'local' else 'false' }}" }
+        - { key: "APP_URL", value: "https://{{ domain_config.domain }}" }
+        - { key: "APP_KEY", value: "{{ domain_config.laravel_app_key }}" }
+        - { key: "DB_CONNECTION", value: "mysql" }
+        - { key: "DB_HOST", value: "127.0.0.1" }
+        - { key: "DB_PORT", value: "3306" }
+        - { key: "DB_DATABASE", value: "{{ domain_config.mysql_db_name }}" }
+        - { key: "DB_USERNAME", value: "{{ domain_config.mysql_db_user }}" }
+        - { key: "DB_PASSWORD", value: "{{ domain_config.mysql_db_password }}" }
+        - { key: "MAIL_MAILER", value: "{{ 'smtp' if domain_config.enable_smtp | default(false) else 'log' }}" }
+        - { key: "MAIL_HOST", value: "{{ domain_config.smtp_host | default('mailhog') }}" }
+        - { key: "MAIL_PORT", value: "{{ domain_config.smtp_port | default('1025') }}" }
+        - { key: "MAIL_USERNAME", value: "{{ domain_config.smtp_username | default('null') }}" }
+        - { key: "MAIL_PASSWORD", value: "{{ domain_config.smtp_password | default('null') }}" }
+        - { key: "MAIL_ENCRYPTION", value: "{{ domain_config.smtp_encryption | default('null') }}" }
+        - { key: "MAIL_FROM_ADDRESS", value: "{{ domain_config.laravel_admin_email }}" }
+        - { key: "MAIL_FROM_NAME", value: "\"{{ domain_config.laravel_app_name }}\"" }
+        - { key: "CACHE_DRIVER", value: "{{ 'redis' if domain_config.install_redis | default(false) else 'file' }}" }
+        - { key: "QUEUE_CONNECTION", value: "{{ domain_config.queue_driver | default('sync') }}" }
+        - { key: "SESSION_DRIVER", value: "{{ 'redis' if domain_config.install_redis | default(false) else 'file' }}" }
+        - { key: "SESSION_LIFETIME", value: "120" }
+        - { key: "REDIS_HOST", value: "{{ domain_config.wp_redis_host | default('127.0.0.1') if domain_config.install_redis | default(false) else '127.0.0.1' }}" }
+        - { key: "REDIS_PASSWORD", value: "{{ domain_config.wp_redis_password | default('null') if domain_config.install_redis | default(false) else 'null' }}" }
+        - { key: "REDIS_PORT", value: "{{ domain_config.wp_redis_port | default('6379') if domain_config.install_redis | default(false) else '6379' }}" }
+    
+    - name: Generate Laravel application key if not provided
+      shell: |
+        cd /var/www/{{ domain_config.domain }}/html
+        php artisan key:generate --force
+      become: true
+      become_user: www-data
+      when: domain_config.laravel_app_key is not defined or domain_config.laravel_app_key == ""
+    
+    - name: Run Laravel migrations
+      shell: |
+        cd /var/www/{{ domain_config.domain }}/html
+        php artisan migrate --force
+      become: true
+      become_user: www-data
+      ignore_errors: true
+    
+    - name: Configure Nginx for Laravel
+      template:
+        src: templates/laravel-nginx.conf.j2
+        dest: "/etc/nginx/sites-available/{{ domain_config.domain }}.conf"
+        mode: '0644'
+      notify: Restart Nginx
+    
+    - name: Enable Nginx site
+      file:
+        src: "/etc/nginx/sites-available/{{ domain_config.domain }}.conf"
+        dest: "/etc/nginx/sites-enabled/{{ domain_config.domain }}.conf"
+        state: link
+      notify: Restart Nginx
+    
+    - name: Optimize Laravel
+      shell: |
+        cd /var/www/{{ domain_config.domain }}/html
+        php artisan optimize
+      become: true
+      become_user: www-data
+      when: domain_config.laravel_app_env != 'local'
+  
+  handlers:
+    - name: Restart Nginx
+      service:
+        name: nginx
+        state: restarted

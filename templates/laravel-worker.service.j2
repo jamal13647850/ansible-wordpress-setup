@@ -1,0 +1,14 @@
+# templates/laravel-worker.service.j2
+[Unit]
+Description=Laravel Queue Worker for {{ domain_config.domain }}
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+Restart=always
+ExecStart=/usr/bin/php /var/www/{{ domain_config.domain }}/html/artisan queue:work {{ domain_config.queue_driver | default('database') }} --sleep=3 --tries=3 --max-time=3600
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

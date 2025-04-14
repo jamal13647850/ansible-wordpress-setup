@@ -1,0 +1,46 @@
+---
+- hosts: all
+  become: true
+  tasks:
+    - name: Ensure WordPress directory exists
+      file:
+        path: "/var/www/{{ item.key }}/html"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+      with_dict: "{{ domains }}"
+      when: secure_file_permissions | default(true) | bool
+
+    - name: Set secure permissions for WordPress files
+      shell: |
+        find /var/www/{{ item.key }}/html -type d -exec chmod 755 {} \;
+        find /var/www/{{ item.key }}/html -type f -exec chmod 644 {} \;
+        chmod 600 /var/www/{{ item.key }}/html/wp-config.php
+      with_dict: "{{ domains }}"
+      when: secure_file_permissions | default(true) | bool
+
+    - name: Set proper ownership for WordPress files
+      shell: |
+        chown -R www-data:www-data /var/www/{{ item.key }}/html
+      with_dict: "{{ domains }}"
+      when: secure_file_permissions | default(true) | bool
+
+    - name: Secure uploads directory
+      file:
+        path: "/var/www/{{ item.key }}/html/wp-content/uploads"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+        recurse: yes
+      with_dict: "{{ domains }}"
+      when: secure_file_permissions | default(true) | bool
+
+    - name: Disable direct file editing in WordPress
+      lineinfile:
+        path: "/var/www/{{ item.key }}/html/wp-config.php"
+        line: "define('DISALLOW_FILE_EDIT', true);"
+        insertbefore: "/* That's all, stop editing! Happy publishing. */"
+      with_dict: "{{ domains }}"
+      when: secure_file_permissions | default(true) | bool
