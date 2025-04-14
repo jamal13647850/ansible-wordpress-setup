@@ -44,8 +44,8 @@ This repository contains an automated deployment system for setting up WordPress
 
 1. Clone this repository to your local machine:
    ```bash
-   git clone https://github.com/yourusername/server-deployment.git
-   cd server-deployment
+   git clone https://github.com/jamal13647850/ansible-wordpress-setup
+   cd ansible-wordpress-setup
    ```
 
 2. Run the configuration generator script:
