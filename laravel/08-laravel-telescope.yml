@@ -1,117 +1,137 @@
-# laravel/07-laravel-websockets.yml
+# laravel/08-laravel-telescope.yml
 - hosts: all
   become: true
   vars:
-    # Determine if Laravel WebSockets is enabled for this domain
-    effective_enable_websockets: "{{ domain_config.enable_websockets | default(GLOBAL_LARAVEL_ENABLE_WEBSOCKETS | default(false)) }}"
-
     _app_domain: "{{ domain_config.domain }}"
     _laravel_webroot: "/var/www/{{ _app_domain }}/html"
-    _app_domain_slug: "{{ _app_domain | replace('.', '-') | replace('_', '-') }}"
-    _laravel_websockets_service_name: "laravel-websockets-{{ _app_domain_slug }}.service"
+    _web_user: "www-data" # Ou o usuário que executa o PHP/Nginx
+    _web_group: "www-data" # Ou o grupo que executa o PHP/Nginx
 
-    _web_user: "www-data" # User for composer and artisan commands
-    _web_group: "www-data"
+    # Esta variável deve ser definida em group_vars/all.yml através do generate_config.sh
+    # Exemplo: domain_config.enable_telescope ou GLOBAL_LARAVEL_ENABLE_TELESCOPE
+    effective_enable_telescope: "{{ domain_config.enable_telescope | default(GLOBAL_LARAVEL_ENABLE_TELESCOPE | default(false)) }}"
+    
+    # Path para o dashboard do Telescope. Pode ser configurado por domínio.
+    effective_telescope_path: "{{ domain_config.telescope_path | default('telescope') }}"
+    
+    # Habilita o Telescope em produção. CUIDADO: Pode expor dados sensíveis.
+    # Por padrão, Telescope só é habilitado em ambientes não produtivos.
+    # domain_config.laravel_app_env deve ser 'production', 'local', 'development', etc.
+    _is_production_env: "{{ (domain_config.laravel_app_env | default('production') | lower) == 'production' }}"
+    _allow_telescope_in_production: "{{ domain_config.telescope_allow_in_production | default(false) | bool }}"
+    
+    # Determina se o Telescope deve ser habilitado no .env
+    # Habilitado se:
+    #   1. Não é produção OU
+    #   2. É produção E _allow_telescope_in_production é true
+    _final_telescope_enabled_env_setting: "{{ (not _is_production_env) or (_is_production_env and _allow_telescope_in_production) }}"
 
-    # Variables for laravel-websockets.service.j2 & laravel-websockets-nginx.conf.j2
-    # The websockets:serve command defaults to host 0.0.0.0 and port 6001.
-    # These can be overridden in Laravel's config/websockets.php or via command options in the service file.
-    _websockets_service_host: "{{ domain_config.websockets_service_host | default(GLOBAL_LARAVEL_WEBSOCKETS_HOST | default('0.0.0.0')) }}"
-    _websockets_service_port: "{{ domain_config.websockets_service_port | default(GLOBAL_LARAVEL_WEBSOCKETS_PORT | default(6001)) }}"
 
-    # Nginx will typically proxy to 127.0.0.1:{{_websockets_service_port}}
-    _nginx_proxy_pass_ws_host: "127.0.0.1"
-    _nginx_proxy_pass_ws_url: "http://{{ _nginx_proxy_pass_ws_host }}:{{ _websockets_service_port }}"
-
-  # This playbook is specific to Laravel and runs only if WebSockets are enabled.
   when:
     - domain_config is defined
     - domain_config.platform is defined and domain_config.platform == "laravel"
-    - effective_enable_websockets | bool
+    - effective_enable_telescope | bool
 
   tasks:
-    - name: "Install beyondcode/laravel-websockets package for {{ _app_domain }}"
+    - name: "Ensure laravel_app_env is defined for Telescope logic"
+      ansible.builtin.fail:
+        msg: "Required variable 'domain_config.laravel_app_env' is not defined for Telescope setup of {{ _app_domain }}. This is needed to determine if the environment is production."
+      when: domain_config.laravel_app_env is not defined
+
+    - name: "Install Laravel Telescope package for {{ _app_domain }}"
       ansible.builtin.shell:
-        cmd: "composer require beyondcode/laravel-websockets"
+        cmd: "composer require laravel/telescope --dev" # --dev é recomendado para Telescope
         chdir: "{{ _laravel_webroot }}"
       become: true
       become_user: "{{ _web_user }}"
-      register: websockets_install_result
-      changed_when: "'Nothing to install or update' not in websockets_install_result.stdout"
-      failed_when: websockets_install_result.rc != 0
-      tags: ['laravel', 'websockets', 'composer', 'install']
+      register: telescope_composer_require_result
+      changed_when: "'Nothing to install or update' not in telescope_composer_require_result.stdout and 'Generating autoload files' in telescope_composer_require_result.stdout"
+      failed_when: telescope_composer_require_result.rc != 0
+      tags: ['laravel', 'telescope', 'composer', 'install']
 
-    - name: "Publish Laravel WebSockets configuration and run migrations for {{ _app_domain }}"
+    - name: "Publish Telescope assets and configuration for {{ _app_domain }}"
       ansible.builtin.shell:
         cmd: |
-          php artisan vendor:publish --provider="BeyondCode\LaravelWebSockets\WebSocketsServiceProvider" --tag="config"
-          php artisan vendor:publish --provider="BeyondCode\LaravelWebSockets\WebSocketsServiceProvider" --tag="migrations"
-          php artisan migrate --force
+          php artisan telescope:install
+          php artisan vendor:publish --provider="Laravel\Telescope\TelescopeServiceProvider" --tag="telescope-config" --tag="telescope-migrations" --force
         chdir: "{{ _laravel_webroot }}"
       become: true
       become_user: "{{ _web_user }}"
-      register: websockets_publish_result
-      # Check for common success messages or simply if rc == 0
-      changed_when: "'Published' in websockets_publish_result.stdout or 'Copied' in websockets_publish_result.stdout or 'Migrating' in websockets_publish_result.stdout or 'Nothing to migrate.' in websockets_publish_result.stdout"
-      failed_when: "websockets_publish_result.rc != 0 and 'Nothing to migrate.' not in websockets_publish_result.stdout" # Allow 'Nothing to migrate'
-      tags: ['laravel', 'websockets', 'artisan', 'config', 'db']
+      register: telescope_install_result
+      # telescope:install geralmente não tem output se já foi feito, vendor:publish tem.
+      changed_when: "'Published' in telescope_install_result.stdout or 'Copied' in telescope_install_result.stdout or 'successfully' in telescope_install_result.stdout_lines | join(' ')"
+      tags: ['laravel', 'telescope', 'artisan', 'config']
 
-    - name: "Create systemd service file for Laravel WebSockets: {{ _laravel_websockets_service_name }}"
-      ansible.builtin.template:
-        src: templates/laravel-websockets.service.j2
-        dest: "/etc/systemd/system/{{ _laravel_websockets_service_name }}"
-        owner: root
-        group: root
+    - name: "Run Laravel migrations for Telescope on {{ _app_domain }}"
+      ansible.builtin.shell:
+        cmd: "php artisan migrate --force"
+        chdir: "{{ _laravel_webroot }}"
+      become: true
+      become_user: "{{ _web_user }}"
+      register: telescope_migration_result
+      changed_when: "'Nothing to migrate.' not in telescope_migration_result.stdout and telescope_migration_result.rc == 0 and ('Migrating' in telescope_migration_result.stdout or 'Migrated' in telescope_migration_result.stdout)"
+      failed_when: telescope_migration_result.rc != 0 and 'Nothing to migrate.' not in telescope_migration_result.stdout
+      tags: ['laravel', 'telescope', 'db', 'migrations']
+
+    - name: "Configure Telescope path in config/telescope.php for {{ _app_domain }}"
+      ansible.builtin.lineinfile:
+        path: "{{ _laravel_webroot }}/config/telescope.php"
+        regexp: "^(\\s*)('path'\\s*=>\\s*)'.*',$"
+        line: "\\1\\2'{{ effective_telescope_path }}',"
+        backrefs: yes
+        owner: "{{ _web_user }}"
+        group: "{{ _web_group }}"
         mode: '0644'
-      # The template laravel-websockets.service.j2 will use domain_config.domain,
-      # and potentially _websockets_service_host, _websockets_service_port if made configurable in template.
-      notify: Reload systemd and restart WebSockets service
-      tags: ['laravel', 'websockets', 'systemd', 'config']
+      notify: Clear Laravel Config Cache
+      tags: ['laravel', 'telescope', 'config']
+      when: effective_telescope_path != 'telescope' # Só altera se for diferente do default do Telescope
 
-    - name: "Enable and ensure Laravel WebSockets service is started: {{ _laravel_websockets_service_name }}"
-      ansible.builtin.systemd:
-        name: "{{ _laravel_websockets_service_name }}"
-        state: started
-        enabled: yes
-      tags: ['laravel', 'websockets', 'systemd', 'service']
+    - name: "Set TELESCOPE_ENABLED in .env for {{ _app_domain }}"
+      ansible.builtin.lineinfile:
+        path: "{{ _laravel_webroot }}/.env"
+        regexp: "^TELESCOPE_ENABLED="
+        line: "TELESCOPE_ENABLED={{ 'true' if _final_telescope_enabled_env_setting else 'false' }}"
+        owner: "{{ _web_user }}"
+        group: "{{ _web_group }}"
+        mode: '0600' # .env file should be private
+      notify: Clear Laravel Config Cache
+      tags: ['laravel', 'telescope', 'env', 'config']
 
-    - name: "Configure Nginx for Laravel WebSockets on {{ _app_domain }}"
-      ansible.builtin.template:
-        src: "templates/laravel-websockets-nginx.conf.j2" # CRITICAL: This template needs refactoring
-        dest: "/etc/nginx/sites-available/{{ _app_domain_slug }}-websockets.conf" # Unique config file name
-        owner: root
-        group: root
-        mode: '0644'
-      # This template needs to be adapted to use domain_config for a single domain
-      # and proxy to the correct _nginx_proxy_pass_ws_url.
-      notify: Restart Nginx service
-      tags: ['laravel', 'websockets', 'nginx', 'config']
-
-    - name: "Enable Nginx site for Laravel WebSockets: {{ _app_domain_slug }}-websockets.conf"
+    - name: "Ensure Telescope's /storage/oauth-private.key and oauth-public.key have correct permissions (if they exist)"
       ansible.builtin.file:
-        src: "/etc/nginx/sites-available/{{ _app_domain_slug }}-websockets.conf"
-        dest: "/etc/nginx/sites-enabled/{{ _app_domain_slug }}-websockets.conf"
-        state: link
-        owner: root
-        group: root
-      notify: Restart Nginx service
-      tags: ['laravel', 'websockets', 'nginx', 'config']
+        path: "{{ _laravel_webroot }}/storage/{{ item }}"
+        owner: "{{ _web_user }}"
+        group: "{{ _web_group }}"
+        mode: '0600' # Chaves devem ser privadas
+      loop:
+        - "oauth-private.key"
+        - "oauth-public.key"
+      when: "ansible_check_mode == false" # Evita erro se os arquivos não existirem no check_mode
+      ignore_errors: true # Ignora se os arquivos não existirem (Telescope pode não usar OAuth por padrão)
+      tags: ['laravel', 'telescope', 'permissions']
+      
+    - name: "Ensure Telescope entry points are not blocked by Nginx generic rules"
+      ansible.builtin.debug:
+        msg: |
+          Telescope for {{ _app_domain }} is configured.
+          Dashboard should be accessible at: https://{{ _app_domain }}/{{ effective_telescope_path }}
+          Make sure your Nginx configuration (e.g., in templates/laravel-nginx.conf.j2)
+          does not inadvertently block access to this path if it's within 'public' directory
+          or if you have very restrictive rules for subdirectories.
+          The default Laravel Nginx config usually allows /index.php to handle routing.
+          If Telescope assets (CSS/JS) are not loading, check Nginx error logs and
+          ensure that vendor assets published by Telescope are publicly accessible.
+          You might need to run 'php artisan storage:link' if not already done,
+          and ensure 'php artisan vendor:publish --tag=telescope-assets --force' was successful
+          (though telescope:install usually handles this).
+      tags: ['laravel', 'telescope', 'info']
 
   handlers:
-    - name: Reload systemd and restart WebSockets service
-      ansible.builtin.systemd:
-        daemon_reload: yes
-      notify: "Actually restart WebSockets service for {{ _app_domain_slug }}"
-      listen: "Reload systemd and restart WebSockets service"
-
-    - name: "Actually restart WebSockets service for {{ _app_domain_slug }}"
-      ansible.builtin.systemd:
-        name: "{{ _laravel_websockets_service_name }}"
-        state: restarted
-      listen: "Actually restart WebSockets service for {{ _app_domain_slug }}"
-
-    - name: Restart Nginx service
-      ansible.builtin.systemd:
-        name: nginx
-        state: restarted
-      listen: "Restart Nginx service"
+    - name: Clear Laravel Config Cache
+      ansible.builtin.shell:
+        cmd: "php artisan config:cache" # config:clear também pode ser usado, config:cache é para produção
+        chdir: "{{ _laravel_webroot }}"
+      become: true
+      become_user: "{{ _web_user }}"
+      listen: "Clear Laravel Config Cache"
+      tags: ['laravel', 'cache', 'config']

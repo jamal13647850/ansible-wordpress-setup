@@ -1,45 +1,63 @@
 <?php
-define('DB_NAME', '{{ mysql_db_name }}');
-define('DB_USER', '{{ mysql_db_user }}');
-define('DB_PASSWORD', '{{ mysql_db_password }}');
-define('DB_HOST', 'localhost');
-define('DB_CHARSET', 'utf8mb4');
-define('DB_COLLATE', '');
-$table_prefix = '{{ wordpress_db_prefix }}';
-define('AUTH_KEY',         '{{ lookup("password", "/dev/null length=64") }}');
-define('SECURE_AUTH_KEY',  '{{ lookup("password", "/dev/null length=64") }}');
-define('LOGGED_IN_KEY',    '{{ lookup("password", "/dev/null length=64") }}');
-define('NONCE_KEY',        '{{ lookup("password", "/dev/null length=64") }}');
-define('AUTH_SALT',        '{{ lookup("password", "/dev/null length=64") }}');
-define('SECURE_AUTH_SALT', '{{ lookup("password", "/dev/null length=64") }}');
-define('LOGGED_IN_SALT',   '{{ lookup("password", "/dev/null length=64") }}');
-define('NONCE_SALT',       '{{ lookup("password", "/dev/null length=64") }}');
-define('WP_DEBUG', {{ wp_debug | default('false') }});
+define('DB_NAME', '{{ domain_config.mysql_db_name }}'); # [cite: 361]
+define('DB_USER', '{{ domain_config.mysql_db_user }}'); # [cite: 361]
+define('DB_PASSWORD', '{{ domain_config.mysql_db_password }}'); # [cite: 361]
+define('DB_HOST', '{{ domain_config.mysql_db_host | default("localhost") }}'); # [cite: 361] Added default
+define('DB_CHARSET', '{{ domain_config.wordpress_db_charset | default("utf8mb4") }}'); # [cite: 361]
+define('DB_COLLATE', '{{ domain_config.wordpress_db_collate | default("") }}'); # [cite: 361]
+
+$table_prefix = '{{ domain_config.wordpress_db_prefix }}'; # [cite: 362]
+
+define('AUTH_KEY',         '{{ domain_config.wordpress_auth_key }}'); # [cite: 362]
+define('SECURE_AUTH_KEY',  '{{ domain_config.wordpress_secure_auth_key }}'); # [cite: 363]
+define('LOGGED_IN_KEY',    '{{ domain_config.wordpress_logged_in_key }}'); # [cite: 363]
+define('NONCE_KEY',        '{{ domain_config.wordpress_nonce_key }}'); # [cite: 364]
+define('AUTH_SALT',        '{{ domain_config.wordpress_auth_salt }}'); # [cite: 365]
+define('SECURE_AUTH_SALT', '{{ domain_config.wordpress_secure_auth_salt }}'); # [cite: 365]
+define('LOGGED_IN_SALT',   '{{ domain_config.wordpress_logged_in_salt }}'); # [cite: 366]
+define('NONCE_SALT',       '{{ domain_config.wordpress_nonce_salt }}'); # [cite: 366]
+
+# Ensure these keys are generated if not provided in domain_config
+# This can be done in the playbook before calling this template, or generate_config.sh should ensure they exist.
+# Example of how they were originally: '{{ lookup("password", "/dev/null length=64") }}'
+# For this refactoring, we assume they are pre-populated in domain_config.
+
+define('WP_DEBUG', {{ domain_config.wordpress_debug | default(false) | lower }}); # [cite: 367]
 
 /* Security settings */
-define('FORCE_SSL_LOGIN', true);
-define('FORCE_SSL_ADMIN', true);
-define('DISALLOW_FILE_EDIT', true);
+define('FORCE_SSL_LOGIN', {{ domain_config.wordpress_force_ssl_login | default(true) | lower }}); # [cite: 367]
+define('FORCE_SSL_ADMIN', {{ domain_config.wordpress_force_ssl_admin | default(true) | lower }}); # [cite: 367]
+define('DISALLOW_FILE_EDIT', {{ domain_config.wordpress_disallow_file_edit | default(true) | lower }}); # [cite: 367]
 
 /* Performance settings */
-define('FS_METHOD', 'direct');
-define('DISABLE_WP_CRON', true);
+define('FS_METHOD', '{{ domain_config.wordpress_fs_method | default("direct") }}'); # [cite: 367]
+define('DISABLE_WP_CRON', {{ domain_config.wordpress_disable_wp_cron | default(true) | lower }}); # [cite: 368]
 
 /* Memory limits */
-{% if wp_memory_limit is defined and wp_memory_limit != "" %}
-define('WP_MEMORY_LIMIT', '{{ wp_memory_limit }}');
-{% endif %}
-{% if wp_max_memory_limit is defined and wp_max_memory_limit != "" %}
-define('WP_MAX_MEMORY_LIMIT', '{{ wp_max_memory_limit }}');
+{% if domain_config.wordpress_memory_limit is defined and domain_config.wordpress_memory_limit != "" %} # [cite: 368]
+define('WP_MEMORY_LIMIT', '{{ domain_config.wordpress_memory_limit }}'); # [cite: 368]
+{% endif %} # [cite: 369]
+{% if domain_config.wordpress_max_memory_limit is defined and domain_config.wordpress_max_memory_limit != "" %} # [cite: 369]
+define('WP_MAX_MEMORY_LIMIT', '{{ domain_config.wordpress_max_memory_limit }}'); # [cite: 370]
 {% endif %}
 
-{% if install_redis %}
-define('WP_REDIS_HOST', '{{ wp_redis_host }}');
-define('WP_REDIS_PORT', {{ wp_redis_port }});
-define('WP_REDIS_PASSWORD', '{{ wp_redis_password }}');
-define('WP_REDIS_DATABASE', {{ wp_redis_database }});
+{% if domain_config.install_redis | default(false) %} # [cite: 370]
+define('WP_REDIS_HOST', '{{ domain_config.wp_redis_host | default(domain_config.redis_host | default("127.0.0.1")) }}'); # [cite: 370]
+define('WP_REDIS_PORT', {{ domain_config.wp_redis_port | default(domain_config.redis_port | default(6379)) }}); # [cite: 370]
+{% if domain_config.wp_redis_password is defined and domain_config.wp_redis_password | length > 0 and domain_config.wp_redis_password != 'null' %}
+define('WP_REDIS_PASSWORD', '{{ domain_config.wp_redis_password }}'); # [cite: 370]
+{% else %}
+# define('WP_REDIS_PASSWORD', null); # Or comment out if no password
 {% endif %}
-if (!defined('ABSPATH')) {
-    define('ABSPATH', dirname(__FILE__) . '/');
+define('WP_REDIS_DATABASE', {{ domain_config.wp_redis_database | default(0) }}); # [cite: 371]
+# Optional: Add prefix for Redis keys
+# define('WP_REDIS_PREFIX', '{{ domain_config.domain }}:');
+{% if domain_config.wp_redis_client is defined %}
+# define('WP_REDIS_CLIENT', '{{ domain_config.wp_redis_client }}'); # e.g. phpredis or predis
+{% endif %}
+{% endif %}
+
+if (!defined('ABSPATH')) { # [cite: 371]
+    define('ABSPATH', dirname(__FILE__) . '/'); # [cite: 371]
 }
-require_once(ABSPATH . 'wp-settings.php');
+require_once(ABSPATH . 'wp-settings.php'); # [cite: 371]

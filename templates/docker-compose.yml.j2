@@ -1,25 +1,35 @@
-version: '3'
+version: '3.8' # Updated to a more modern version
 services:
   wordpress:
     image: wordpress:latest
     ports:
-      - "80:80"
+      # The host port should be unique per domain_config or dynamically assigned.
+      # Example: "{{ domain_config.docker_wordpress_port | default('8080') }}:80"
+      # For now, keeping it as it was, but this will cause conflicts if multiple sites use this.
+      - "{{ domain_config.docker_host_port | default('80') }}:80"
     environment:
       WORDPRESS_DB_HOST: db
-      WORDPRESS_DB_USER: {{ mysql_db_user }}
-      WORDPRESS_DB_PASSWORD: {{ mysql_db_password }}
-      WORDPRESS_DB_NAME: {{ mysql_db_name }}
+      WORDPRESS_DB_USER: "{{ domain_config.mysql_db_user }}" # [cite: 345]
+      WORDPRESS_DB_PASSWORD: "{{ domain_config.mysql_db_password }}" # [cite: 345]
+      WORDPRESS_DB_NAME: "{{ domain_config.mysql_db_name }}" # [cite: 345]
+      # WORDPRESS_TABLE_PREFIX: "{{ domain_config.wordpress_db_prefix | default('wp_') }}"
     volumes:
-      - wordpress_data:/var/www/html
+      - "{{ domain_config.domain | replace('.', '_') }}_wordpress_data:/var/www/html" # Unique volume name
+    depends_on:
+      - db
+    restart: unless-stopped
+
   db:
-    image: mysql:5.7
+    image: mysql:5.7 # Consider using mysql:8.0 or mariadb
     environment:
-      MYSQL_ROOT_PASSWORD: {{ mysql_root_password }}
-      MYSQL_DATABASE: {{ mysql_db_name }}
-      MYSQL_USER: {{ mysql_db_user }}
-      MYSQL_PASSWORD: {{ mysql_db_password }}
+      MYSQL_ROOT_PASSWORD: "{{ domain_config.mysql_root_password }}" # [cite: 345]
+      MYSQL_DATABASE: "{{ domain_config.mysql_db_name }}" # [cite: 346]
+      MYSQL_USER: "{{ domain_config.mysql_db_user }}" # [cite: 346]
+      MYSQL_PASSWORD: "{{ domain_config.mysql_db_password }}" # [cite: 346]
     volumes:
-      - db_data:/var/lib/mysql
+      - "{{ domain_config.domain | replace('.', '_') }}_db_data:/var/lib/mysql" # Unique volume name
+    restart: unless-stopped
+
 volumes:
-  wordpress_data:
-  db_data:
+  {{ domain_config.domain | replace('.', '_') }}_wordpress_data:
+  {{ domain_config.domain | replace('.', '_') }}_db_data:

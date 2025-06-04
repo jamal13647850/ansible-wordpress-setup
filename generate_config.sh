@@ -1,821 +1,880 @@
 #!/bin/bash
+# generate_config.sh
+# Script para gerar o arquivo de configuração group_vars/all.yml para os playbooks Ansible.
 
-command -v dialog >/dev/null 2>&1 || { echo "Error: 'dialog' is required but not installed. Install it with 'sudo apt install dialog'."; exit 1; }
-command -v openssl >/dev/null 2>&1 || { echo "Error: 'openssl' is required but not installed. Install it with 'sudo apt install openssl'."; exit 1; }
+set -e
 
-OUTPUT_FILE="group_vars/all.yml"
-TEMP_FILE="/tmp/config_temp_$$"
+# Cores
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+RED='\033[0;31m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
 
-# Associative array to store platform for each domain
+# Diretório e arquivo de configuração
+CONFIG_DIR="group_vars"
+CONFIG_FILE="${CONFIG_DIR}/all.yml"
+
+# Cria o diretório se não existir
+mkdir -p "${CONFIG_DIR}"
+
+# Arrays para armazenar configurações de domínio
 declare -A DOMAIN_PLATFORMS
+declare -A DOMAIN_CONFIGS # Usado para armazenar configurações específicas de cada domínio
+DOMAINS=()              # Array simples para manter a ordem dos domínios adicionados
 
-# Create directories if they don't exist
-mkdir -p group_vars
+# Variáveis globais (prefixadas com GLOBAL_ para clareza no YAML)
+# Estas serão preenchidas pelas funções de configuração global
 
-generate_password() {
-    openssl rand -base64 20 | tr -d '/+=' | head -c 20
-}
+# --- Funções Utilitárias ---
 
-generate_db_prefix() {
-    echo "$(cat /dev/urandom | tr -dc 'a-z' | head -c 2)_"
-}
-
-cleanup() {
-    rm -f "$TEMP_FILE" "$TEMP_FILE"_* 2>/dev/null
-}
-
-trap cleanup EXIT
-
-# Function to determine the platform string value
-# This function ONLY echoes the platform string, no dialogs here.
-_get_platform_string_for_menu() {
-    local context_platform_val=""
-    if [ -n "$DOMAINS" ]; then
-        local first_domain_raw=$(echo "$DOMAINS" | awk '{print $1}')
-        # Ensure first_domain_raw is not empty before using as array key
-        if [ -n "$first_domain_raw" ] && [ -n "${DOMAIN_PLATFORMS[$first_domain_raw]}" ]; then
-            context_platform_val="${DOMAIN_PLATFORMS[$first_domain_raw]}"
-        fi
-    fi
-
-    if [ -z "$context_platform_val" ]; then
-        echo "wordpress" # Default if no specific platform context determined
-    else
-        echo "$context_platform_val"
-    fi
-}
-
-# Function to show a warning dialog if platform context is initially undetermined
-# This function does NOT echo anything for command substitution.
-_show_initial_platform_warning_if_needed() {
-    local platform_determined=false
-    if [ -n "$DOMAINS" ]; then
-        local first_domain_raw=$(echo "$DOMAINS" | awk '{print $1}')
-        if [ -n "$first_domain_raw" ] && [ -n "${DOMAIN_PLATFORMS[$first_domain_raw]}" ]; then
-            platform_determined=true
-        fi
-    fi
-
-    if ! $platform_determined; then
-        # This dialog is only for displaying a message.
-        # It should use the terminal directly.
-        dialog --title 'Platform Context' --msgbox 'Could not determine a specific platform context for some menu items (e.g., no domains configured yet or first domain platform not set). Some options may be based on a default (WordPress) or appear generic.' 10 70 < /dev/tty
-        # Added < /dev/tty to ensure it tries to read from the terminal if it needs to (e.g., for OK button)
-        # although for msgbox it's usually not an issue with stdin.
-    fi
-}
-
-
-# Prepares variables for the main menu
-# Does not display the main menu dialog itself.
-prepare_main_menu_vars() {
-    menu_item_5_label="Application Specific Settings" # Global shell variable, accessible by the loop
-    
-    # Show warning dialog if needed (does not use command substitution for its own display)
-    _show_initial_platform_warning_if_needed
-
-    # Get the platform string value for menu customization
-    local platform_for_menu_label=$(_get_platform_string_for_menu)
-
-    if [ "$platform_for_menu_label" == "wordpress" ]; then
-        menu_item_5_label="Plugins and Themes (WordPress)"
-    elif [ "$platform_for_menu_label" == "laravel" ]; then
-        menu_item_5_label="Laravel Packages"
-    fi
-    # menu_item_5_label is now set for the main loop's dialog
-}
-
-
-# Domain settings
-domain_settings() {
-    dialog --title "Domain Settings" --yesno "Would you like to configure multiple domains?" 10 50 2>"$TEMP_FILE"
-    local choice_code=$?
-    if [ $choice_code -ne 0 ] && [ $choice_code -ne 1 ]; then # Cancel or ESC
-        dialog --title "Cancelled" --msgbox "Domain settings cancelled." 6 40
-        return
-    fi
-    MULTI_DOMAIN=$([[ $choice_code -eq 0 ]] && echo "true" || echo "false")
-
-
-    if [ "$MULTI_DOMAIN" = "true" ]; then
-        dialog --title "Domain Settings" --inputbox "Enter domains (comma-separated, e.g., mysite.com,newsite.com):" 10 50 "" 2>"$TEMP_FILE"
-        if [ $? -ne 0 ]; then dialog --title "Cancelled" --msgbox "Input cancelled." 6 40; return; fi
-        DOMAINS=$(cat "$TEMP_FILE" | tr ',' ' ')
-    else
-        dialog --title "Domain Settings" --inputbox "Enter domain name (e.g., mysite.com):" 10 50 "" 2>"$TEMP_FILE"
-        if [ $? -ne 0 ]; then dialog --title "Cancelled" --msgbox "Input cancelled." 6 40; return; fi
-        DOMAINS=$(cat "$TEMP_FILE")
-    fi
-    if [ -z "$DOMAINS" ]; then
-        dialog --title "Info" --msgbox "No domains entered." 6 40
-    fi
-}
-
-# Basic settings
-basic_settings() {
-    local domain=$1
-    local domain_platform
-
-    dialog --title "Platform for $domain" \
-           --menu "Select the platform for $domain:" 15 50 2 \
-           1 "WordPress" \
-           2 "Laravel" 2>"$TEMP_FILE"
-    local platform_choice_domain_code=$?
-    if [ $platform_choice_domain_code -ne 0 ]; then dialog --title "Cancelled" --msgbox "Platform selection for $domain cancelled." 6 50; return; fi
-
-    local PLATFORM_CHOICE_DOMAIN=$(cat "$TEMP_FILE")
-
-    case $PLATFORM_CHOICE_DOMAIN in
-        1) domain_platform="wordpress" ;;
-        2) domain_platform="laravel" ;;
-        *) dialog --title "Error" --msgbox "Invalid platform selection for $domain. Skipping." 6 50; return ;;
+print_message() {
+    local color="$1"
+    local message="$2"
+    case $color in
+        "green") echo -e "${GREEN}${message}${NC}" ;;
+        "yellow") echo -e "${YELLOW}${message}${NC}" ;;
+        "red") echo -e "${RED}${message}${NC}" ;;
+        "blue") echo -e "${BLUE}${message}${NC}" ;;
+        *) echo -e "${message}" ;;
     esac
-    DOMAIN_PLATFORMS["$domain"]="$domain_platform"
+}
 
-    if [ "$domain_platform" == "wordpress" ]; then
-        dialog --title "Basic Settings for $domain (WordPress)" --form "Enter basic configuration details for $domain:" 15 60 8 \
-               "Admin Username:" 1 1 "${WP_ADMIN_USER:-admin}" 1 20 30 50 \
-               "Admin Email:" 2 1 "${WP_ADMIN_EMAIL:-admin@$domain}" 2 20 30 255 \
-               "Site Title:" 3 1 "${WP_TITLE:-My Site}" 3 20 30 255 \
-               "WP Locale:" 4 1 "${WP_LOCALE:-en_US}" 4 20 10 10 \
-               "SSL Email:" 5 1 "${SSL_EMAIL:-admin@$domain}" 5 20 30 255 \
-               "PHP Version:" 6 1 "${PHP_VERSION:-8.3}" 6 20 10 10 \
-               "Linux Username:" 7 1 "${LINUX_USERNAME:-ubuntu}" 7 20 30 50 \
-               2>"$TEMP_FILE"
-        if [ $? -ne 0 ]; then dialog --title "Cancelled" --msgbox "Basic settings for $domain cancelled." 6 50; return; fi
-        # ... (rest of variable assignments and eval as before)
-        IFS=$'\n' read -r -d '' WP_ADMIN_USER WP_ADMIN_EMAIL WP_TITLE WP_LOCALE SSL_EMAIL PHP_VERSION LINUX_USERNAME < "$TEMP_FILE"
+generate_secure_password() {
+    # Gera uma senha de 32 caracteres hexadecimais (16 bytes)
+    openssl rand -hex 16
+}
 
-        MYSQL_ROOT_PASSWORD=$(generate_password)
-        MYSQL_DB_NAME="wp_$(echo "$domain" | tr -d '.' | tr '[:upper:]' '[:lower:]')"
-        MYSQL_DB_USER="wpuser_$(echo "$domain" | tr -d '.' | tr '[:upper:]' '[:lower:]')"
-        MYSQL_DB_PASSWORD=$(generate_password)
-        WP_ADMIN_PASSWORD=$(generate_password)
-        WP_DB_PREFIX=$(generate_db_prefix)
+validate_email() {
+    local email="$1"
+    if [[ ! "$email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        return 1
+    fi
+    return 0
+}
 
-        eval "DOMAIN_${domain//./_}_SETTINGS='platform: \"wordpress\"\\nmysql_root_password: \"$MYSQL_ROOT_PASSWORD\"\\nmysql_db_name: \"$MYSQL_DB_NAME\"\\nmysql_db_user: \"$MYSQL_DB_USER\"\\nmysql_db_password: \"$MYSQL_DB_PASSWORD\"\\ndomain: \"$domain\"\\nwordpress_admin_user: \"$WP_ADMIN_USER\"\\nwordpress_admin_password: \"$WP_ADMIN_PASSWORD\"\\nwordpress_admin_email: \"$WP_ADMIN_EMAIL\"\\nwordpress_title: \"$WP_TITLE\"\\nwordpress_locale: \"$WP_LOCALE\"\\nwordpress_db_prefix: \"$WP_DB_PREFIX\"\\nssl_email: \"$SSL_EMAIL\"\\nphp_version: \"$PHP_VERSION\"\\nlinux_username: \"$LINUX_USERNAME\"'"
+validate_domain_name() {
+    local domain="$1"
+    # Regex simples para validação de nome de domínio
+    if [[ ! "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$ ]]; then
+        return 1
+    fi
+    return 0
+}
 
-    else # Laravel settings
-        dialog --title "Basic Settings for $domain (Laravel)" --form "Enter basic configuration details for $domain:" 15 60 8 \
-               "App Name:" 1 1 "${LARAVEL_APP_NAME:-$domain}" 1 20 30 50 \
-               "App Environment:" 2 1 "${LARAVEL_APP_ENV:-production}" 2 20 30 50 \
-               "Admin Email:" 3 1 "${LARAVEL_ADMIN_EMAIL:-admin@$domain}" 3 20 30 255 \
-               "SSL Email:" 4 1 "${SSL_EMAIL:-admin@$domain}" 4 20 30 255 \
-               "PHP Version:" 5 1 "${PHP_VERSION:-8.3}" 5 20 10 10 \
-               "Laravel Version:" 6 1 "${LARAVEL_VERSION:-10.*}" 6 20 10 10 \
-               "Linux Username:" 7 1 "${LINUX_USERNAME:-ubuntu}" 7 20 30 50 \
-               2>"$TEMP_FILE"
-        if [ $? -ne 0 ]; then dialog --title "Cancelled" --msgbox "Basic settings for $domain cancelled." 6 50; return; fi
-        # ... (rest of variable assignments and eval as before)
-        IFS=$'\n' read -r -d '' LARAVEL_APP_NAME LARAVEL_APP_ENV LARAVEL_ADMIN_EMAIL SSL_EMAIL PHP_VERSION LARAVEL_VERSION LINUX_USERNAME < "$TEMP_FILE"
+ask_yes_no() {
+    local prompt_message="$1"
+    local default_answer="${2:-y}" # 'y' ou 'n'
+    local full_prompt
 
-        MYSQL_ROOT_PASSWORD=$(generate_password)
-        MYSQL_DB_NAME="laravel_$(echo "$domain" | tr -d '.' | tr '[:upper:]' '[:lower:]')"
-        MYSQL_DB_USER="lrvuser_$(echo "$domain" | tr -d '.' | tr '[:upper:]' '[:lower:]')"
-        MYSQL_DB_PASSWORD=$(generate_password)
-        LARAVEL_APP_KEY=$(openssl rand -base64 32)
+    if [[ "$default_answer" == "y" ]]; then
+        full_prompt="$prompt_message [Y/n]: "
+    else
+        full_prompt="$prompt_message [y/N]: "
+    fi
 
-        eval "DOMAIN_${domain//./_}_SETTINGS='platform: \"laravel\"\\nmysql_root_password: \"$MYSQL_ROOT_PASSWORD\"\\nmysql_db_name: \"$MYSQL_DB_NAME\"\\nmysql_db_user: \"$MYSQL_DB_USER\"\\nmysql_db_password: \"$MYSQL_DB_PASSWORD\"\\ndomain: \"$domain\"\\nlaravel_app_name: \"$LARAVEL_APP_NAME\"\\nlaravel_app_env: \"$LARAVEL_APP_ENV\"\\nlaravel_admin_email: \"$LARAVEL_ADMIN_EMAIL\"\\nlaravel_app_key: \"$LARAVEL_APP_KEY\"\\nlaravel_version: \"$LARAVEL_VERSION\"\\nssl_email: \"$SSL_EMAIL\"\\nphp_version: \"$PHP_VERSION\"\\nlinux_username: \"$LINUX_USERNAME\"'"
+    while true; do
+        read -p "$(echo -e "${YELLOW}${full_prompt}${NC}")" response
+        response=${response:-$default_answer} # Usa o padrão se a resposta for vazia
+        case "$response" in
+            [Yy]*) return 0 ;; # true
+            [Nn]*) return 1 ;; # false
+            *) print_message "red" "Please answer yes (y) or no (n)." ;;
+        esac
+    done
+}
+
+# Armazena uma configuração para um domínio específico
+# Ex: store_domain_setting "example.com" "php_version" "8.1"
+store_domain_setting() {
+    local domain_name="$1"
+    local key="$2"
+    local value="$3"
+    DOMAIN_CONFIGS["${domain_name}___${key}"]="$value" # Usar ___ para evitar conflito com '.' em nomes de chaves
+}
+
+# Obtém uma configuração de um domínio, com fallback para um valor padrão
+# Ex: php_version=$(get_domain_setting "example.com" "php_version" "8.2")
+get_domain_setting() {
+    local domain_name="$1"
+    local key="$2"
+    local default_value="${3:-}"
+    local value="${DOMAIN_CONFIGS["${domain_name}___${key}"]}"
+    if [[ -z "$value" ]]; then
+        echo "$default_value"
+    else
+        echo "$value"
     fi
 }
 
-# Security Settings
-security_settings() {
-    local func_platform_context=$(_get_platform_string_for_menu) # Use the new function to get context
+# --- Funções de Configuração Global ---
 
-    dialog --title "Security Settings" --checklist "Select security options:" 20 60 12 \
-           "restrict_ip" "Restrict IP access" off \
-           "basic_auth" "Enable Basic Authentication" off \
-           "ssh_security" "Secure SSH access" off \
-           "anti_hack" "Advanced anti-hack measures" off \
-           "anti_bot" "Anti-bot protection" off \
-           "anti_ddos" "Anti-DDoS protection" off \
-           "waf" "Web Application Firewall" off \
-           "login_limit" "Limit login attempts" off 2>"$TEMP_FILE"
-    if [ $? -ne 0 ]; then return; fi # Allow cancellation
-    # ... (rest of security_settings as before, using func_platform_context)
-    SECURITY_OPTIONS=$(cat "$TEMP_FILE")
+configure_global_server_settings() {
+    print_message "blue" "\n--- Configuring Global Server Settings ---"
 
-    if echo "$SECURITY_OPTIONS" | grep -q "restrict_ip"; then
-        RESTRICT_IP_ACCESS="true"
-        dialog --title "IP Restriction" --inputbox "Enter allowed IPs (comma-separated):" 10 50 "" 2>"$TEMP_FILE"
-        if [ $? -ne 0 ]; then RESTRICT_IP_ACCESS="false"; else IPS=$(cat "$TEMP_FILE"); fi
-        ALLOWED_IPS=""
-        if [ "$RESTRICT_IP_ACCESS" = "true" ]; then
-            for ip in $(echo "$IPS" | tr ',' ' '); do
-                ALLOWED_IPS="$ALLOWED_IPS  - \"$ip\"\n"
-            done
-        fi
-    else
-        RESTRICT_IP_ACCESS="false"
-        ALLOWED_IPS=""
-    fi
+    read -p "Enter default Linux username for server operations (e.g., ubuntu, admin): " GLOBAL_LINUX_USERNAME
+    GLOBAL_LINUX_USERNAME=${GLOBAL_LINUX_USERNAME:-ubuntu}
 
-    if echo "$SECURITY_OPTIONS" | grep -q "basic_auth"; then
-        ENABLE_BASIC_AUTH="true"
-        dialog --title "Basic Authentication" --form "Enter credentials:" 10 50 2 \
-               "Username:" 1 1 "$BASIC_AUTH_USER" 1 20 20 50 \
-               "Password:" 2 1 "$BASIC_AUTH_PASSWORD" 2 20 20 50 \
-               2>"$TEMP_FILE"
-        if [ $? -ne 0 ]; then ENABLE_BASIC_AUTH="false"; else IFS=$'\n' read -r -d '' BASIC_AUTH_USER BASIC_AUTH_PASSWORD < "$TEMP_FILE"; fi
-    else
-        ENABLE_BASIC_AUTH="false"
-        BASIC_AUTH_USER=""
-        BASIC_AUTH_PASSWORD=""
-    fi
+    read -p "Enter default PHP version for new sites (e.g., 8.1, 8.2, 8.3): " GLOBAL_PHP_DEFAULT_VERSION
+    GLOBAL_PHP_DEFAULT_VERSION=${GLOBAL_PHP_DEFAULT_VERSION:-8.2}
 
-    ENABLE_SSH_SECURITY=$(echo "$SECURITY_OPTIONS" | grep -q "ssh_security" && echo "true" || echo "false")
-    ENABLE_ANTI_HACK=$(echo "$SECURITY_OPTIONS" | grep -q "anti_hack" && echo "true" || echo "false")
-    ENABLE_ANTI_BOT=$(echo "$SECURITY_OPTIONS" | grep -q "anti_bot" && echo "true" || echo "false")
-    ENABLE_ANTI_DDOS=$(echo "$SECURITY_OPTIONS" | grep -q "anti_ddos" && echo "true" || echo "false")
-    ENABLE_WAF=$(echo "$SECURITY_OPTIONS" | grep -q "waf" && echo "true" || echo "false")
-    ENABLE_LOGIN_LIMIT=$(echo "$SECURITY_OPTIONS" | grep -q "login_limit" && echo "true" || echo "false")
-
-    if [ "$func_platform_context" == "laravel" ]; then
-        dialog --title "Laravel Security" --checklist "Select Laravel security options:" 15 60 5 \
-               "secure_api" "Secure API endpoints" off \
-               "rate_limiting" "API rate limiting" off \
-               "csrf_protection" "CSRF protection" on \
-               "secure_headers" "HTTP security headers" on \
-               "xss_protection" "XSS protection" on 2>"$TEMP_FILE"
-        if [ $? -ne 0 ]; then return; fi # Allow cancellation
-
-        LARAVEL_SECURITY_OPTIONS=$(cat "$TEMP_FILE")
-        ENABLE_SECURE_API=$(echo "$LARAVEL_SECURITY_OPTIONS" | grep -q "secure_api" && echo "true" || echo "false")
-        ENABLE_RATE_LIMITING=$(echo "$LARAVEL_SECURITY_OPTIONS" | grep -q "rate_limiting" && echo "true" || echo "false")
-        ENABLE_CSRF_PROTECTION=$(echo "$LARAVEL_SECURITY_OPTIONS" | grep -q "csrf_protection" && echo "true" || echo "false")
-        ENABLE_SECURE_HEADERS=$(echo "$LARAVEL_SECURITY_OPTIONS" | grep -q "secure_headers" && echo "true" || echo "false")
-        ENABLE_XSS_PROTECTION=$(echo "$LARAVEL_SECURITY_OPTIONS" | grep -q "xss_protection" && echo "true" || echo "false")
-    fi
-}
-
-# Performance Settings
-performance_settings() {
-    local func_platform_context=$(_get_platform_string_for_menu)
-    common_options="\"php_opcache\" \"PHP OPcache\" off \\
-           \"redis\" \"Redis caching\" off \\
-           \"browser_caching\" \"Browser caching\" off \\
-           \"db_optimization\" \"Database optimization\" off"
-
-    local dialog_options_string=""
-    local dialog_title_suffix=""
-
-    if [ "$func_platform_context" == "wordpress" ]; then
-        dialog_title_suffix="(WordPress Context)"
-        dialog_options_string="$common_options \\
-           \"advanced_caching\" \"Advanced caching (e.g., Memcached)\" off \\
-           \"cdn\" \"CDN (e.g., Cloudflare)\" off \\
-           \"local_cdn\" \"Local CDN (e.g., ArvanCloud)\" off \\
-           \"lazy_loading\" \"Lazy loading\" off \\
-           \"quic_http3\" \"QUIC/HTTP3\" off \\
-           \"dynamic_caching\" \"Dynamic caching (e.g., Varnish)\" off \\
-           \"performance_report\" \"Performance report\" off"
-    elif [ "$func_platform_context" == "laravel" ]; then
-        dialog_title_suffix="(Laravel Context)"
-        dialog_options_string="$common_options \\
-           \"queue\" \"Queue system (Laravel)\" off \\
-           \"horizon\" \"Laravel Horizon\" off \\
-           \"cdn\" \"CDN (e.g., Cloudflare)\" off \\
-           \"local_cdn\" \"Local CDN (e.g., ArvanCloud)\" off \\
-           \"octane\" \"Laravel Octane\" off \\
-           \"telescope\" \"Laravel Telescope\" off \\
-           \"performance_report\" \"Performance report\" off"
-    else # Generic or undetermined
-        dialog_title_suffix="(Generic Context)"
-        dialog_options_string="$common_options \\
-           \"cdn\" \"CDN (e.g., Cloudflare)\" off \\
-           \"local_cdn\" \"Local CDN (e.g., ArvanCloud)\" off \\
-           \"performance_report\" \"Performance report\" off"
-
-    fi
-
-    eval "dialog --title \"Performance Settings $dialog_title_suffix\" --checklist \"Select performance options:\" 20 75 12 $dialog_options_string 2>\"\$TEMP_FILE\""
-    if [ $? -ne 0 ]; then return; fi # Allow cancellation
-    PERFORMANCE_OPTIONS=$(cat "$TEMP_FILE")
-
-    # ... (rest of performance_settings logic as before, using func_platform_context and checking PERFORMANCE_OPTIONS)
-    # Make sure to add cancel checks for subsequent dialogs as well.
-    if [ "$func_platform_context" == "wordpress" ]; then
-        dialog --title "WordPress Memory Limits" --form "Set WordPress memory limits:" 10 60 2 \
-               "WP_MEMORY_LIMIT (e.g., 128M):" 1 1 "${WP_MEMORY_LIMIT:-128M}" 1 30 10 10 \
-               "WP_MAX_MEMORY_LIMIT (e.g., 256M):" 2 1 "${WP_MAX_MEMORY_LIMIT:-256M}" 2 30 10 10 \
-               2>"$TEMP_FILE"
-        if [ $? -eq 0 ]; then IFS=$'\n' read -r -d '' WP_MEMORY_LIMIT WP_MAX_MEMORY_LIMIT < "$TEMP_FILE"; fi
-    fi
-
-    if echo "$PERFORMANCE_OPTIONS" | grep -q "php_opcache"; then
-        ENABLE_PHP_OPCACHE="true"
-        dialog --title "PHP OPcache" --inputbox "Enter OPcache memory (default: 128):" 10 50 "128" 2>"$TEMP_FILE"
-        if [ $? -eq 0 ]; then OPCACHE_MEMORY=$(cat "$TEMP_FILE"); else ENABLE_PHP_OPCACHE="false"; fi
-    else
-        ENABLE_PHP_OPCACHE="false"
-        OPCACHE_MEMORY=""
-    fi
-
-    if echo "$PERFORMANCE_OPTIONS" | grep -q "redis"; then
-        INSTALL_REDIS="true"
-        WP_REDIS_HOST="127.0.0.1"
-        WP_REDIS_PORT="6379"
-        WP_REDIS_PASSWORD=$(generate_password)
-        dialog --title "Redis" --inputbox "Enter Redis database (0-15, default: 0):" 10 50 "0" 2>"$TEMP_FILE"
-        if [ $? -eq 0 ]; then WP_REDIS_DATABASE=$(cat "$TEMP_FILE"); else INSTALL_REDIS="false"; fi
-    else
-        INSTALL_REDIS="false"
-        WP_REDIS_HOST=""
-        WP_REDIS_PORT=""
-        WP_REDIS_PASSWORD=""
-        WP_REDIS_DATABASE=""
-    fi
-
-    if [ "$func_platform_context" == "wordpress" ] && echo "$PERFORMANCE_OPTIONS" | grep -q "advanced_caching"; then
-        ENABLE_ADVANCED_CACHING="true"
-        dialog --title "Advanced Caching" --inputbox "Enter caching type (redis/memcached, default: memcached):" 10 50 "memcached" 2>"$TEMP_FILE"
-        if [ $? -eq 0 ]; then CACHE_TYPE=$(cat "$TEMP_FILE"); else ENABLE_ADVANCED_CACHING="false"; fi
-    else
-        ENABLE_ADVANCED_CACHING="false"
-        CACHE_TYPE=""
-    fi
-
-    if echo "$PERFORMANCE_OPTIONS" | grep -q "cdn"; then
-        ENABLE_CDN="true"
-        dialog --title "CDN" --form "Enter CDN details:" 15 60 3 \
-               "Provider:" 1 1 "$CDN_PROVIDER" 1 20 20 50 \
-               "API Key:" 2 1 "$CDN_API_KEY" 2 20 40 255 \
-               "Account/Email:" 3 1 "$CDN_ACCOUNT" 3 20 40 255 \
-               2>"$TEMP_FILE"
-        if [ $? -eq 0 ]; then IFS=$'\n' read -r -d '' CDN_PROVIDER CDN_API_KEY CDN_ACCOUNT < "$TEMP_FILE"; else ENABLE_CDN="false"; fi
-    else
-        ENABLE_CDN="false"
-        CDN_PROVIDER=""
-        CDN_API_KEY=""
-        CDN_ACCOUNT=""
-    fi
-
-    if echo "$PERFORMANCE_OPTIONS" | grep -q "local_cdn"; then
-        ENABLE_LOCAL_CDN="true"
-        dialog --title "Local CDN" --form "Enter Local CDN details:" 10 60 2 \
-               "Provider:" 1 1 "$LOCAL_CDN_PROVIDER" 1 20 20 50 \
-               "API Key:" 2 1 "$LOCAL_CDN_API_KEY" 2 20 40 255 \
-               2>"$TEMP_FILE"
-       if [ $? -eq 0 ]; then IFS=$'\n' read -r -d '' LOCAL_CDN_PROVIDER LOCAL_CDN_API_KEY < "$TEMP_FILE"; else ENABLE_LOCAL_CDN="false"; fi
-    else
-        ENABLE_LOCAL_CDN="false"
-        LOCAL_CDN_PROVIDER=""
-        LOCAL_CDN_API_KEY=""
-    fi
-
-    if [ "$func_platform_context" == "laravel" ]; then
-        ENABLE_QUEUE=$(echo "$PERFORMANCE_OPTIONS" | grep -q "queue" && echo "true" || echo "false")
-        ENABLE_HORIZON=$(echo "$PERFORMANCE_OPTIONS" | grep -q "horizon" && echo "true" || echo "false")
-        ENABLE_OCTANE=$(echo "$PERFORMANCE_OPTIONS" | grep -q "octane" && echo "true" || echo "false")
-        ENABLE_TELESCOPE=$(echo "$PERFORMANCE_OPTIONS" | grep -q "telescope" && echo "true" || echo "false")
-
-        if [ "$ENABLE_QUEUE" = "true" ]; then
-            dialog --title "Queue Driver" --menu "Select queue driver:" 15 50 4 \
-                   "sync" "Synchronous (default)" \
-                   "database" "Database" \
-                   "redis" "Redis" \
-                   "beanstalkd" "Beanstalkd" 2>"$TEMP_FILE"
-            if [ $? -eq 0 ]; then QUEUE_DRIVER=$(cat "$TEMP_FILE"); else ENABLE_QUEUE="false"; fi
-        fi
-
-        if [ "$ENABLE_OCTANE" = "true" ]; then
-            dialog --title "Octane Server" --menu "Select Octane server:" 10 50 2 \
-                   "swoole" "Swoole" \
-                   "roadrunner" "RoadRunner" 2>"$TEMP_FILE"
-            if [ $? -eq 0 ]; then OCTANE_SERVER=$(cat "$TEMP_FILE"); else ENABLE_OCTANE="false"; fi
-        fi
-    fi
-
-    ENABLE_BROWSER_CACHING=$(echo "$PERFORMANCE_OPTIONS" | grep -q "browser_caching" && echo "true" || echo "false")
-    ENABLE_DB_OPTIMIZATION=$(echo "$PERFORMANCE_OPTIONS" | grep -q "db_optimization" && echo "true" || echo "false")
-    ENABLE_PERFORMANCE_REPORT=$(echo "$PERFORMANCE_OPTIONS" | grep -q "performance_report" && echo "true" || echo "false")
-
-    if [ "$func_platform_context" == "wordpress" ]; then
-        ENABLE_LAZY_LOADING=$(echo "$PERFORMANCE_OPTIONS" | grep -q "lazy_loading" && echo "true" || echo "false")
-        ENABLE_QUIC_HTTP3=$(echo "$PERFORMANCE_OPTIONS" | grep -q "quic_http3" && echo "true" || echo "false")
-        ENABLE_DYNAMIC_CACHING=$(echo "$PERFORMANCE_OPTIONS" | grep -q "dynamic_caching" && echo "true" || echo "false")
-    fi
-}
-
-# Plugins and Themes / Laravel Packages
-plugins_themes() {
-    local func_platform_context=$(_get_platform_string_for_menu)
-
-    if [ "$func_platform_context" == "wordpress" ]; then
-        dialog --title "Plugins and Themes (WordPress)" --checklist "Select options:" 15 60 7 \
-               "plugins" "Install WordPress plugins" off \
-               "seo" "Basic SEO setup" off \
-               "woocommerce" "WooCommerce store" off \
-               "form_builder" "Form builder (e.g., Contact Form 7)" off \
-               "plugin_categories" "Plugin categories" off 2>"$TEMP_FILE"
-        if [ $? -ne 0 ]; then return; fi
-        PLUGINS_OPTIONS=$(cat "$TEMP_FILE")
-
-        if echo "$PLUGINS_OPTIONS" | grep -q "plugins"; then
-            INSTALL_PLUGINS="true"
-            dialog --title "Plugins" --inputbox "Enter plugins (slug or ZIP path, comma-separated):" 10 50 "" 2>"$TEMP_FILE"
-            if [ $? -eq 0 ]; then PLUGINS_LIST=$(cat "$TEMP_FILE"); else INSTALL_PLUGINS="false"; fi
-            PLUGINS=""
-            if [ "$INSTALL_PLUGINS" = "true" ]; then
-                for plugin in $(echo "$PLUGINS_LIST" | tr ',' ' '); do
-                    if [[ "$plugin" =~ \.zip$ && -f "$plugin" ]]; then
-                        PLUGINS="$PLUGINS  - { path: \"$plugin\", source: \"local\" }\n"
-                    else
-                        PLUGINS="$PLUGINS  - { slug: \"$plugin\", source: \"wordpress\" }\n"
-                    fi
-                done
-            fi
-        else
-            INSTALL_PLUGINS="false"
-            PLUGINS=""
-        fi
-        # ... (rest of options for WordPress plugins)
-        ENABLE_SEO=$(echo "$PLUGINS_OPTIONS" | grep -q "seo" && echo "true" || echo "false")
-        ENABLE_WOOCOMMERCE=$(echo "$PLUGINS_OPTIONS" | grep -q "woocommerce" && echo "true" || echo "false")
-        ENABLE_FORM_BUILDER=$(echo "$PLUGINS_OPTIONS" | grep -q "form_builder" && echo "true" || echo "false")
-
-        if echo "$PLUGINS_OPTIONS" | grep -q "plugin_categories"; then
-            ENABLE_PLUGIN_CATEGORIES="true"
-            dialog --title "Plugin Categories" --inputbox "Enter categories (e.g., security,seo):" 10 50 "" 2>"$TEMP_FILE"
-            if [ $? -eq 0 ]; then PLUGIN_CATEGORIES=$(cat "$TEMP_FILE"); else ENABLE_PLUGIN_CATEGORIES="false"; fi
-        else
-            ENABLE_PLUGIN_CATEGORIES="false"
-            PLUGIN_CATEGORIES=""
-        fi
-
-    elif [ "$func_platform_context" == "laravel" ]; then
-        dialog --title "Laravel Packages" --checklist "Select packages to install:" 15 60 10 \
-               "debugbar" "Laravel Debugbar" off \
-               "ide_helper" "Laravel IDE Helper" off \
-               "sanctum" "Laravel Sanctum" off \
-               "socialite" "Laravel Socialite" off \
-               "spatie_permission" "Spatie Laravel Permission" off \
-               "spatie_media" "Spatie Media Library" off \
-               "passport" "Laravel Passport" off \
-               "custom_packages" "Custom packages" off 2>"$TEMP_FILE"
-        if [ $? -ne 0 ]; then return; fi
-        LARAVEL_PACKAGES_OPTIONS=$(cat "$TEMP_FILE")
-
-        # ... (rest of options for Laravel packages)
-        INSTALL_DEBUGBAR=$(echo "$LARAVEL_PACKAGES_OPTIONS" | grep -q "debugbar" && echo "true" || echo "false")
-        INSTALL_IDE_HELPER=$(echo "$LARAVEL_PACKAGES_OPTIONS" | grep -q "ide_helper" && echo "true" || echo "false")
-        INSTALL_SANCTUM=$(echo "$LARAVEL_PACKAGES_OPTIONS" | grep -q "sanctum" && echo "true" || echo "false")
-        INSTALL_SOCIALITE=$(echo "$LARAVEL_PACKAGES_OPTIONS" | grep -q "socialite" && echo "true" || echo "false")
-        INSTALL_SPATIE_PERMISSION=$(echo "$LARAVEL_PACKAGES_OPTIONS" | grep -q "spatie_permission" && echo "true" || echo "false")
-        INSTALL_SPATIE_MEDIA=$(echo "$LARAVEL_PACKAGES_OPTIONS" | grep -q "spatie_media" && echo "true" || echo "false")
-        INSTALL_PASSPORT=$(echo "$LARAVEL_PACKAGES_OPTIONS" | grep -q "passport" && echo "true" || echo "false")
-
-        if echo "$LARAVEL_PACKAGES_OPTIONS" | grep -q "custom_packages"; then
-            INSTALL_CUSTOM_PACKAGES="true"
-            dialog --title "Custom Packages" --inputbox "Enter packages (comma-separated):" 10 50 "" 2>"$TEMP_FILE"
-            if [ $? -eq 0 ]; then CUSTOM_PACKAGES=$(cat "$TEMP_FILE"); else INSTALL_CUSTOM_PACKAGES="false"; fi
-        else
-            INSTALL_CUSTOM_PACKAGES="false"
-            CUSTOM_PACKAGES=""
-        fi
-    else
-        dialog --title "Information" --msgbox "Platform context for Application Specific Settings is unclear or not WordPress/Laravel. This section will be skipped." 8 70
-    fi
-}
-
-# Backup and Migration
-backup_migration() {
-    dialog --title "Backup and Migration" --checklist "Select options:" 15 60 6 \
-           "backups" "Automatic backups" off \
-           "advanced_backup" "Advanced backup" off \
-           "migration" "Migrate existing site" off \
-           "rollback" "Automatic rollback" off 2>"$TEMP_FILE"
-    if [ $? -ne 0 ]; then return; fi
-    BACKUP_OPTIONS=$(cat "$TEMP_FILE")
-
-    # ... (rest of backup_migration logic with cancel checks for sub-dialogs)
-    if echo "$BACKUP_OPTIONS" | grep -q "backups"; then
-        ENABLE_BACKUPS="true"
-        dialog --title "Backups" --form "Enter backup details:" 10 60 2 \
-               "Directory:" 1 1 "${BACKUP_DIR:-/var/backups}" 1 20 30 255 \
-               "Frequency (cron):" 2 1 "${BACKUP_FREQ:-0 2 * * *}" 2 20 20 50 \
-               2>"$TEMP_FILE"
-        if [ $? -eq 0 ]; then IFS=$'\n' read -r -d '' BACKUP_DIR BACKUP_FREQ < "$TEMP_FILE"; else ENABLE_BACKUPS="false"; fi
-    else
-        ENABLE_BACKUPS="false"
-        BACKUP_DIR=""
-        BACKUP_FREQ=""
-    fi
-
-    ENABLE_ADVANCED_BACKUP=$(echo "$BACKUP_OPTIONS" | grep -q "advanced_backup" && echo "true" || echo "false")
-
-    if echo "$BACKUP_OPTIONS" | grep -q "migration"; then
-        ENABLE_MIGRATION="true"
-        dialog --title "Migration" --form "Enter migration details:" 10 60 2 \
-               "DB Backup Path:" 1 1 "$MIGRATION_DB_PATH" 1 20 30 255 \
-               "Files Backup Path:" 2 1 "$MIGRATION_FILES_PATH" 2 20 30 255 \
-               2>"$TEMP_FILE"
-      if [ $? -eq 0 ]; then IFS=$'\n' read -r -d '' MIGRATION_DB_PATH MIGRATION_FILES_PATH < "$TEMP_FILE"; else ENABLE_MIGRATION="false"; fi
-    else
-        ENABLE_MIGRATION="false"
-        MIGRATION_DB_PATH=""
-        MIGRATION_FILES_PATH=""
-    fi
-
-    ENABLE_ROLLBACK=$(echo "$BACKUP_OPTIONS" | grep -q "rollback" && echo "true" || echo "false")
-}
-
-# Advanced Features
-advanced_features() {
-    local func_platform_context=$(_get_platform_string_for_menu)
-    common_options="\"monitoring\" \"Monitoring and logging\" off \\
-           \"php_versions\" \"Manage PHP versions\" off \\
-           \"staging\" \"Staging environment\" off \\
-           \"auto_test\" \"Auto-test after install\" off \\
-           \"dev_tools\" \"Developer tools (e.g., phpMyAdmin)\" off \\
-           \"cloud_monitoring\" \"Cloud monitoring (e.g., UptimeRobot)\" off"
-
-    local adv_dialog_options_string=""
-    local adv_dialog_title_suffix=""
-
-    if [ "$func_platform_context" == "wordpress" ]; then
-        adv_dialog_title_suffix="(WordPress Context)"
-        adv_dialog_options_string="\"multisite\" \"WordPress Multisite\" off \\
-               \"smtp\" \"SMTP email\" off \\
-               $common_options \\
-               \"image_optimization\" \"Image optimization\" off \\
-               \"add_wp_users\" \"Add WordPress users\" off \\
-               \"headless_cms\" \"Headless CMS\" off"
-    elif [ "$func_platform_context" == "laravel" ]; then
-        adv_dialog_title_suffix="(Laravel Context)"
-        adv_dialog_options_string="\"smtp\" \"SMTP email\" off \\
-               $common_options \\
-               \"scheduler\" \"Task Scheduler (Laravel)\" off \\
-               \"api\" \"API Setup (Laravel)\" off \\
-               \"websockets\" \"WebSockets (Laravel)\" off"
-    else # Generic
-        adv_dialog_title_suffix="(Generic Context)"
-        adv_dialog_options_string="\"smtp\" \"SMTP email\" off \\
-            $common_options"
-    fi
-    
-    eval "dialog --title \"Advanced Features $adv_dialog_title_suffix\" --checklist \"Select options:\" 20 75 12 $adv_dialog_options_string 2>\"\$TEMP_FILE\""
-    if [ $? -ne 0 ]; then return; fi # Allow cancellation
-    ADVANCED_OPTIONS=$(cat "$TEMP_FILE")
-
-    # ... (rest of advanced_features logic as before, using func_platform_context and checking ADVANCED_OPTIONS)
-    # Ensure to add cancel checks for sub-dialogs.
-    if [ "$func_platform_context" == "wordpress" ]; then
-        if echo "$ADVANCED_OPTIONS" | grep -q "multisite"; then
-            ENABLE_MULTISITE="true"
-            dialog --title "Multisite" --inputbox "Enter type (subdomain/subdirectory, default: subdomain):" 10 50 "subdomain" 2>"$TEMP_FILE"
-            if [ $? -eq 0 ]; then MULTISITE_TYPE=$(cat "$TEMP_FILE"); else ENABLE_MULTISITE="false"; fi
-        else
-            ENABLE_MULTISITE="false"
-            MULTISITE_TYPE=""
-        fi
-
-        if echo "$ADVANCED_OPTIONS" | grep -q "image_optimization"; then
-            ENABLE_IMAGE_OPTIMIZATION="true"
-        else
-            ENABLE_IMAGE_OPTIMIZATION="false"
-        fi
-
-        if echo "$ADVANCED_OPTIONS" | grep -q "add_wp_users"; then
-            ENABLE_ADD_WP_USERS="true"
-            dialog --title "WordPress Users" --inputbox "Enter users (username:email:role, comma-separated):" 10 50 "" 2>"$TEMP_FILE"
-            if [ $? -eq 0 ]; then WP_USERS_INPUT=$(cat "$TEMP_FILE"); else ENABLE_ADD_WP_USERS="false"; fi
-        else
-            ENABLE_ADD_WP_USERS="false"
-            WP_USERS_INPUT=""
-        fi
-        ENABLE_HEADLESS_CMS=$(echo "$ADVANCED_OPTIONS" | grep -q "headless_cms" && echo "true" || echo "false")
-    fi
-
-    if [ "$func_platform_context" == "laravel" ]; then
-        ENABLE_SCHEDULER=$(echo "$ADVANCED_OPTIONS" | grep -q "scheduler" && echo "true" || echo "false")
-        ENABLE_API=$(echo "$ADVANCED_OPTIONS" | grep -q "api" && echo "true" || echo "false")
-        ENABLE_WEBSOCKETS=$(echo "$ADVANCED_OPTIONS" | grep -q "websockets" && echo "true" || echo "false")
-
-        if [ "$ENABLE_API" = "true" ]; then
-            dialog --title "API Setup" --checklist "Select API options:" 15 60 4 \
-                   "api_auth" "API Authentication" on \
-                   "api_docs" "API Documentation" off \
-                   "api_versioning" "API Versioning" off \
-                   "api_rate_limit" "API Rate Limiting" off 2>"$TEMP_FILE"
-            if [ $? -eq 0 ]; then API_OPTIONS=$(cat "$TEMP_FILE"); else ENABLE_API="false"; fi
-            
-            if [ "$ENABLE_API" = "true" ]; then # check again in case previous dialog was cancelled
-                ENABLE_API_AUTH=$(echo "$API_OPTIONS" | grep -q "api_auth" && echo "true" || echo "false")
-                ENABLE_API_DOCS=$(echo "$API_OPTIONS" | grep -q "api_docs" && echo "true" || echo "false")
-                ENABLE_API_VERSIONING=$(echo "$API_OPTIONS" | grep -q "api_versioning" && echo "true" || echo "false")
-                ENABLE_API_RATE_LIMIT=$(echo "$API_OPTIONS" | grep -q "api_rate_limit" && echo "true" || echo "false")
-            fi
-        fi
-    fi
-
-    if echo "$ADVANCED_OPTIONS" | grep -q "smtp"; then
-        ENABLE_SMTP="true"
-        dialog --title "SMTP" --form "Enter SMTP details:" 15 60 5 \
-               "Host:" 1 1 "$SMTP_HOST" 1 20 30 255 \
-               "Port:" 2 1 "$SMTP_PORT" 2 20 10 10 \
-               "Username:" 3 1 "$SMTP_USERNAME" 3 20 30 50 \
-               "Password:" 4 1 "$SMTP_PASSWORD" 4 20 30 50 \
-               "Encryption (tls/ssl/none):" 5 1 "${SMTP_ENCRYPTION:-tls}" 5 20 10 10 \
-               2>"$TEMP_FILE"
-        if [ $? -eq 0 ]; then IFS=$'\n' read -r -d '' SMTP_HOST SMTP_PORT SMTP_USERNAME SMTP_PASSWORD SMTP_ENCRYPTION < "$TEMP_FILE"; else ENABLE_SMTP="false"; fi
-    else
-        ENABLE_SMTP="false"
-        SMTP_HOST=""
-        SMTP_PORT=""
-        SMTP_USERNAME=""
-        SMTP_PASSWORD=""
-        SMTP_ENCRYPTION=""
-    fi
-
-    ENABLE_MONITORING=$(echo "$ADVANCED_OPTIONS" | grep -q "monitoring" && echo "true" || echo "false")
-
-    if echo "$ADVANCED_OPTIONS" | grep -q "php_versions"; then
-        ENABLE_PHP_VERSIONS="true"
-        dialog --title "PHP Versions" --inputbox "Enter additional PHP versions (comma-separated, e.g., 7.4,8.0):" 10 50 "" 2>"$TEMP_FILE"
-        if [ $? -eq 0 ]; then PHP_ADDITIONAL_VERSIONS=$(cat "$TEMP_FILE"); else ENABLE_PHP_VERSIONS="false"; fi
-    else
-        ENABLE_PHP_VERSIONS="false"
-        PHP_ADDITIONAL_VERSIONS=""
-    fi
-
-    if echo "$ADVANCED_OPTIONS" | grep -q "staging"; then
-        ENABLE_STAGING="true"
-        dialog --title "Staging" --inputbox "Enter staging subdomain (default: staging):" 10 50 "staging" 2>"$TEMP_FILE"
-        if [ $? -eq 0 ]; then STAGING_SUBDOMAIN=$(cat "$TEMP_FILE"); else ENABLE_STAGING="false"; fi
-    else
-        ENABLE_STAGING="false"
-        STAGING_SUBDOMAIN=""
-    fi
-
-    ENABLE_AUTO_TEST=$(echo "$ADVANCED_OPTIONS" | grep -q "auto_test" && echo "true" || echo "false")
-    ENABLE_DEV_TOOLS=$(echo "$ADVANCED_OPTIONS" | grep -q "dev_tools" && echo "true" || echo "false")
-    ENABLE_CLOUD_MONITORING=$(echo "$ADVANCED_OPTIONS" | grep -q "cloud_monitoring" && echo "true" || echo "false")
-}
-
-
-# Generate Configuration
-generate_config() {
-    echo "---" > "$OUTPUT_FILE"
-    # Global 'platform' is removed. It's now per-domain.
-    # TODO: Global settings (like install_redis, enable_smtp etc.) should ideally be written here, once,
-    # not under each domain. This requires further refactoring of how global settings are collected
-    # and then accessed here. For now, they are still written under each domain as per the original logic's flow.
-
-    echo "domains:" >> "$OUTPUT_FILE"
-    for domain_key in $DOMAINS; do
-        domain_var_name="DOMAIN_${domain_key//./_}_SETTINGS"
-        domain_specific_settings=${!domain_var_name} # This now contains the per-domain platform correctly
-
-        echo "  $domain_key:" >> "$OUTPUT_FILE"
-        echo -e "$domain_specific_settings" | sed 's/^/    /' >> "$OUTPUT_FILE"
-
-        # The following "global" settings are still repeated under each domain.
-        # This is because the variables (e.g., RESTRICT_IP_ACCESS) are set globally in the script
-        # based on one-time dialogs. A more robust solution would collect these into a global
-        # section of the YAML, but that's a larger change to the script's variable handling.
-        echo "    restrict_ip_access: ${RESTRICT_IP_ACCESS:-false}" >> "$OUTPUT_FILE"
-        if [ "${RESTRICT_IP_ACCESS:-false}" = "true" ]; then
-            echo "    allowed_ips:" >> "$OUTPUT_FILE"
-            echo -e "${ALLOWED_IPS:-""}" | sed 's/^/      /' >> "$OUTPUT_FILE"
-        else
-            echo "    allowed_ips: []" >> "$OUTPUT_FILE"
-        fi
-        # ... (rest of the generate_config function as previously, ensuring to use default values for unset vars)
-        # This function still needs significant refactoring to truly separate global from per-domain vars in output.
-        # The current focus was fixing the immediate dialog hang and per-domain platform.
-        echo "    enable_basic_auth: ${ENABLE_BASIC_AUTH:-false}" >> "$OUTPUT_FILE"
-        if [ "${ENABLE_BASIC_AUTH:-false}" = "true" ]; then
-            echo "    basic_auth_user: \"${BASIC_AUTH_USER:-}\"" >> "$OUTPUT_FILE"
-            echo "    basic_auth_password: \"${BASIC_AUTH_PASSWORD:-}\"" >> "$OUTPUT_FILE"
-        fi
-
-        echo "    enable_ssh_security: ${ENABLE_SSH_SECURITY:-false}" >> "$OUTPUT_FILE"
-        echo "    enable_anti_hack: ${ENABLE_ANTI_HACK:-false}" >> "$OUTPUT_FILE"
-        echo "    enable_anti_bot: ${ENABLE_ANTI_BOT:-false}" >> "$OUTPUT_FILE"
-        echo "    enable_anti_ddos: ${ENABLE_ANTI_DDOS:-false}" >> "$OUTPUT_FILE"
-        echo "    enable_waf: ${ENABLE_WAF:-false}" >> "$OUTPUT_FILE"
-        echo "    enable_login_limit: ${ENABLE_LOGIN_LIMIT:-false}" >> "$OUTPUT_FILE"
-
-        local current_domain_platform_for_gen="${DOMAIN_PLATFORMS[$domain_key]}" # Get specific platform
-        if [ "$current_domain_platform_for_gen" == "laravel" ]; then
-            echo "    enable_secure_api: ${ENABLE_SECURE_API:-false}" >> "$OUTPUT_FILE"
-            echo "    enable_rate_limiting: ${ENABLE_RATE_LIMITING:-false}" >> "$OUTPUT_FILE"
-            echo "    enable_csrf_protection: ${ENABLE_CSRF_PROTECTION:-true}" >> "$OUTPUT_FILE"
-            echo "    enable_secure_headers: ${ENABLE_SECURE_HEADERS:-true}" >> "$OUTPUT_FILE"
-            echo "    enable_xss_protection: ${ENABLE_XSS_PROTECTION:-true}" >> "$OUTPUT_FILE"
-        fi
-
-        if [ "$current_domain_platform_for_gen" == "wordpress" ]; then
-            echo "    wp_memory_limit: \"${WP_MEMORY_LIMIT:-128M}\"" >> "$OUTPUT_FILE"
-            echo "    wp_max_memory_limit: \"${WP_MAX_MEMORY_LIMIT:-256M}\"" >> "$OUTPUT_FILE"
-        fi
-
-        echo "    install_redis: ${INSTALL_REDIS:-false}" >> "$OUTPUT_FILE" # Should be global
-        if [ "${INSTALL_REDIS:-false}" = "true" ]; then
-            echo "    wp_redis_host: \"${WP_REDIS_HOST:-127.0.0.1}\"" >> "$OUTPUT_FILE"
-            echo "    wp_redis_port: ${WP_REDIS_PORT:-6379}" >> "$OUTPUT_FILE"
-            echo "    wp_redis_password: \"${WP_REDIS_PASSWORD:-}\"" >> "$OUTPUT_FILE"
-            echo "    wp_redis_database: ${WP_REDIS_DATABASE:-0}" >> "$OUTPUT_FILE"
-        fi
-
-        if [ "${ENABLE_PHP_OPCACHE:-false}" = "true" ]; then # Should be global
-            echo "    enable_php_opcache: ${ENABLE_PHP_OPCACHE:-false}" >> "$OUTPUT_FILE"
-            echo "    opcache_memory: ${OPCACHE_MEMORY:-128}" >> "$OUTPUT_FILE"
-        fi
-
-        if [ "$current_domain_platform_for_gen" == "wordpress" ] && [ "${ENABLE_ADVANCED_CACHING:-false}" = "true" ]; then
-            echo "    enable_advanced_caching: ${ENABLE_ADVANCED_CACHING:-false}" >> "$OUTPUT_FILE"
-            echo "    cache_type: \"${CACHE_TYPE:-memcached}\"" >> "$OUTPUT_FILE"
-        fi
-
-        echo "    enable_cdn: ${ENABLE_CDN:-false}" >> "$OUTPUT_FILE" # Should be global
-        if [ "${ENABLE_CDN:-false}" = "true" ]; then
-            echo "    cdn_provider: \"${CDN_PROVIDER:-}\"" >> "$OUTPUT_FILE"
-            echo "    cdn_api_key: \"${CDN_API_KEY:-}\"" >> "$OUTPUT_FILE"
-            echo "    cdn_account: \"${CDN_ACCOUNT:-}\"" >> "$OUTPUT_FILE"
-        fi
-         # ... (continue for all other settings, using current_domain_platform_for_gen for platform-specific ones)
-         # This part is still lengthy and repetitive due to original structure.
-        echo "" >> $OUTPUT_FILE
+    print_message "yellow" "Enter a strong MySQL root password. This will be set on the server."
+    read -s -p "MySQL Root Password: " GLOBAL_MYSQL_ROOT_PASSWORD
+    echo
+    while [[ -z "$GLOBAL_MYSQL_ROOT_PASSWORD" ]]; do
+        print_message "red" "MySQL root password cannot be empty."
+        read -s -p "MySQL Root Password: " GLOBAL_MYSQL_ROOT_PASSWORD
+        echo
     done
 
-    dialog --title "Configuration Generated" --msgbox "Configuration has been saved to $OUTPUT_FILE" 8 50
+    if ask_yes_no "Enable management of additional PHP versions globally?" "n"; then
+        GLOBAL_ENABLE_PHP_VERSIONS_MANAGEMENT="true"
+        read -p "Enter additional PHP versions to install, comma-separated (e.g., 7.4,8.0): " GLOBAL_PHP_ADDITIONAL_VERSIONS_STRING
+    else
+        GLOBAL_ENABLE_PHP_VERSIONS_MANAGEMENT="false"
+    fi
+    
+    read -p "Default Let's Encrypt email for SSL (required for SSL generation): " GLOBAL_LETSENCRYPT_DEFAULT_EMAIL
+    while ! validate_email "$GLOBAL_LETSENCRYPT_DEFAULT_EMAIL" && [[ -n "$GLOBAL_LETSENCRYPT_DEFAULT_EMAIL" ]]; do # Permite vazio se SSL não for usado globalmente
+        print_message "red" "Invalid email format."
+        read -p "Default Let's Encrypt email for SSL: " GLOBAL_LETSENCRYPT_DEFAULT_EMAIL
+    done
+    if ask_yes_no "Use Let's Encrypt staging server for testing certificates globally (not for production)?" "n"; then
+        GLOBAL_LETSENCRYPT_TEST_CERT="true"
+    else
+        GLOBAL_LETSENCRYPT_TEST_CERT="false"
+    fi
+
+}
+
+configure_global_services() {
+    print_message "blue" "\n--- Configuring Global Service Settings ---"
+    # Redis
+    if ask_yes_no "Install Redis server globally (can be used by WordPress/Laravel)?" "n"; then
+        GLOBAL_INSTALL_REDIS="true"
+        read -p "Global Redis host (default: 127.0.0.1): " GLOBAL_REDIS_HOST
+        GLOBAL_REDIS_HOST=${GLOBAL_REDIS_HOST:-127.0.0.1}
+        read -p "Global Redis port (default: 6379): " GLOBAL_REDIS_PORT
+        GLOBAL_REDIS_PORT=${GLOBAL_REDIS_PORT:-6379}
+        read -p "Global Redis password (leave empty for none, or 'generate'): " redis_pass_input
+        if [[ "$redis_pass_input" == "generate" ]]; then
+            GLOBAL_REDIS_PASSWORD=$(generate_secure_password)
+            print_message "green" "Generated Redis password: $GLOBAL_REDIS_PASSWORD (save this)"
+        elif [[ -n "$redis_pass_input" ]]; then
+            GLOBAL_REDIS_PASSWORD="$redis_pass_input"
+        else
+            GLOBAL_REDIS_PASSWORD="" # Explicitamente vazio
+        fi
+    else
+        GLOBAL_INSTALL_REDIS="false"
+    fi
+
+    # SMTP
+    if ask_yes_no "Configure global SMTP settings (master switch for SMTP relay, e.g. MailHog, Postfix, or external service)?" "n"; then
+        GLOBAL_ENABLE_SMTP_MASTER_SWITCH="true"
+        read -p "Global SMTP Host (e.g., smtp.example.com, localhost for local relay): " GLOBAL_SMTP_HOST
+        GLOBAL_SMTP_HOST=${GLOBAL_SMTP_HOST:-localhost}
+        read -p "Global SMTP Port (e.g., 587, 465, 1025): " GLOBAL_SMTP_PORT
+        GLOBAL_SMTP_PORT=${GLOBAL_SMTP_PORT:-587}
+        read -p "Global SMTP Username (leave empty if none): " GLOBAL_SMTP_USERNAME
+        read -s -p "Global SMTP Password (leave empty if none): " GLOBAL_SMTP_PASSWORD
+        echo
+        read -p "Global SMTP Encryption (tls, ssl, or none): " GLOBAL_SMTP_ENCRYPTION
+        GLOBAL_SMTP_ENCRYPTION=${GLOBAL_SMTP_ENCRYPTION:-tls}
+    else
+        GLOBAL_ENABLE_SMTP_MASTER_SWITCH="false"
+    fi
+}
+
+configure_global_security_features() {
+    print_message "blue" "\n--- Configuring Global Security Features ---"
+    # Fail2Ban
+    if ask_yes_no "Enable Fail2Ban globally (for SSH and other services)?" "y"; then
+        GLOBAL_FAIL2BAN_ENABLED="true"
+        read -p "Global Fail2Ban default maxretry (default: 5): " GLOBAL_FAIL2BAN_DEFAULT_MAXRETRY
+        GLOBAL_FAIL2BAN_DEFAULT_MAXRETRY=${GLOBAL_FAIL2BAN_DEFAULT_MAXRETRY:-5}
+        read -p "Global Fail2Ban default findtime (e.g., 10m, 1h, default: 10m): " GLOBAL_FAIL2BAN_DEFAULT_FINDTIME
+        GLOBAL_FAIL2BAN_DEFAULT_FINDTIME=${GLOBAL_FAIL2BAN_DEFAULT_FINDTIME:-10m}
+        read -p "Global Fail2Ban default bantime (e.g., 1h, 1d, -1 for permanent, default: 1h): " GLOBAL_FAIL2BAN_DEFAULT_BANTIME
+        GLOBAL_FAIL2BAN_DEFAULT_BANTIME=${GLOBAL_FAIL2BAN_DEFAULT_BANTIME:-1h}
+    else
+        GLOBAL_FAIL2BAN_ENABLED="false"
+    fi
+
+    # WAF (ModSecurity)
+    if ask_yes_no "Enable WAF (ModSecurity with Nginx) base installation globally?" "n"; then
+        GLOBAL_ENABLE_WAF_DEFAULT="true"
+        # Configurações mais detalhadas do WAF (regras, etc.) são complexas para este script
+        # e devem ser feitas nos playbooks ou manualmente.
+    else
+        GLOBAL_ENABLE_WAF_DEFAULT="false"
+    fi
+
+    # General Security Policies
+    if ask_yes_no "Apply a global policy for securing file permissions on webroots (can be overridden per domain)?" "y"; then
+        GLOBAL_SECURE_FILE_PERMISSIONS_POLICY="true"
+    else
+        GLOBAL_SECURE_FILE_PERMISSIONS_POLICY="false"
+    fi
+    if ask_yes_no "Apply a global policy for securing database user privileges (can be overridden per domain)?" "y"; then
+        GLOBAL_SECURE_DATABASE_POLICY="true"
+    else
+        GLOBAL_SECURE_DATABASE_POLICY="false"
+    fi
+    if ask_yes_no "Enable system security auditing tools (Lynis, Rkhunter) globally?" "y"; then
+        GLOBAL_SECURITY_AUDIT_POLICY="true"
+    else
+        GLOBAL_SECURITY_AUDIT_POLICY="false"
+    fi
+     if ask_yes_no "Enable global advanced security measures (e.g., some CSF hardening if installed by Nginx playbook)?" "n"; then
+        GLOBAL_ENABLE_ADVANCED_SECURITY="true" # Relacionado ao playbook 11-advanced-security.yml
+    else
+        GLOBAL_ENABLE_ADVANCED_SECURITY="false"
+    fi
+
+}
+
+configure_global_operational_features() {
+    print_message "blue" "\n--- Configuring Global Operational Features ---"
+    # Backups
+    if ask_yes_no "Enable automated backups globally (master switch, can be configured per domain)?" "n"; then
+        GLOBAL_ENABLE_BACKUPS_MASTER_SWITCH="true"
+        read -p "Global base directory for backups (default: /var/backups/ansible_managed): " GLOBAL_BACKUP_BASE_DIR
+        GLOBAL_BACKUP_BASE_DIR=${GLOBAL_BACKUP_BASE_DIR:-/var/backups/ansible_managed}
+        read -p "Global default backup frequency (cron format, e.g., '0 2 * * *' for daily at 2 AM): " GLOBAL_BACKUP_DEFAULT_FREQ
+        GLOBAL_BACKUP_DEFAULT_FREQ=${GLOBAL_BACKUP_DEFAULT_FREQ:-"0 2 * * *"}
+    else
+        GLOBAL_ENABLE_BACKUPS_MASTER_SWITCH="false"
+    fi
+
+    # Monitoring
+    if ask_yes_no "Install basic system monitoring tools (htop, logrotate) globally?" "y"; then
+        GLOBAL_ENABLE_MONITORING_TOOLS="true"
+    else
+        GLOBAL_ENABLE_MONITORING_TOOLS="false"
+    fi
+
+    # Docker Support
+    if ask_yes_no "Enable Docker support on the server (install Docker engine and Compose)?" "n"; then
+        GLOBAL_ENABLE_DOCKER_SUPPORT="true"
+    else
+        GLOBAL_ENABLE_DOCKER_SUPPORT="false"
+    fi
+
+    # Rollback Policy
+    if ask_yes_no "Enable pre-action backups for rollback capability globally (can be configured per domain)?" "y"; then
+        GLOBAL_ENABLE_ROLLBACK_POLICY="true"
+        read -p "Global base directory for pre-action backups (default: /var/backups/ansible_pre_action): " GLOBAL_PRE_ACTION_BACKUP_DIR
+        GLOBAL_PRE_ACTION_BACKUP_DIR=${GLOBAL_PRE_ACTION_BACKUP_DIR:-/var/backups/ansible_pre_action}
+    else
+        GLOBAL_ENABLE_ROLLBACK_POLICY="false"
+    fi
+    
+    # Project Documentation Generation
+    if ask_yes_no "Enable generation of multilingual project documentation (Ansible project itself, runs on localhost)?" "n"; then
+        GLOBAL_ENABLE_MULTILINGUAL_DOCS="true"
+        read -p "Languages for documentation, comma-separated (e.g., en,fa): " GLOBAL_DOC_LANGUAGES_LIST
+        GLOBAL_DOC_LANGUAGES_LIST=${GLOBAL_DOC_LANGUAGES_LIST:-en,fa}
+    else
+        GLOBAL_ENABLE_MULTILINGUAL_DOCS="false"
+    fi
 }
 
 
-# Main execution
-while true; do
-    prepare_main_menu_vars # Sets $menu_item_5_label based on first domain's platform (if any)
+# --- Funções de Configuração por Domínio ---
 
-    dialog --title "Deployment Configuration" \
-           --menu "Select a configuration category:" 15 60 8 \
-           1 "Domain Settings" \
-           2 "Basic Settings (Per Domain)" \
-           3 "Security Settings" \
-           4 "Performance Settings" \
-           5 "$menu_item_5_label" \
-           6 "Backup and Migration" \
-           7 "Advanced Features" \
-           8 "Generate Configuration" 2>"$TEMP_FILE"
-    CHOICE_RTN_CODE=$?
+configure_domain_basics() {
+    local domain_name="$1"
+    local platform="$2"
+    print_message "blue" "\n--- Configuring Basic Settings for Domain: $domain_name ($platform) ---"
 
-    if [ $CHOICE_RTN_CODE -ne 0 ]; then # Handle Cancel/ESC in main menu (0 is OK, 1 is Cancel)
-        cleanup
-        echo "Configuration cancelled by user."
+    # Email, PHP Version (pode usar globais como fallback)
+    read -p "Admin email for $domain_name (default: $GLOBAL_LETSENCRYPT_DEFAULT_EMAIL): " admin_email
+    admin_email=${admin_email:-$GLOBAL_LETSENCRYPT_DEFAULT_EMAIL}
+    while ! validate_email "$admin_email"; do
+        print_message "red" "Invalid email format for $domain_name."
+        read -p "Admin email for $domain_name: " admin_email
+    done
+    store_domain_setting "$domain_name" "admin_email" "$admin_email"
+    
+    if [[ -n "$GLOBAL_LETSENCRYPT_DEFAULT_EMAIL" && "$admin_email" == "$GLOBAL_LETSENCRYPT_DEFAULT_EMAIL" ]]; then
+         store_domain_setting "$domain_name" "ssl_email" "$GLOBAL_LETSENCRYPT_DEFAULT_EMAIL" # Usa o global se for o mesmo
+    elif [[ -n "$admin_email" ]]; then
+        if ask_yes_no "Use '$admin_email' as the Let's Encrypt SSL email for $domain_name?" "y"; then
+            store_domain_setting "$domain_name" "ssl_email" "$admin_email"
+        else
+            read -p "Enter specific Let's Encrypt SSL email for $domain_name (leave empty to skip SSL): " specific_ssl_email
+            if [[ -n "$specific_ssl_email" ]]; then
+                 while ! validate_email "$specific_ssl_email"; do
+                    print_message "red" "Invalid SSL email format."
+                    read -p "Specific Let's Encrypt SSL email for $domain_name: " specific_ssl_email
+                done
+                store_domain_setting "$domain_name" "ssl_email" "$specific_ssl_email"
+            else
+                store_domain_setting "$domain_name" "ssl_email" "" # Sem SSL para este domínio
+            fi
+        fi
+    else
+        store_domain_setting "$domain_name" "ssl_email" "" # Sem SSL
+    fi
+
+
+    read -p "PHP version for $domain_name (default: $GLOBAL_PHP_DEFAULT_VERSION): " php_version
+    php_version=${php_version:-$GLOBAL_PHP_DEFAULT_VERSION}
+    store_domain_setting "$domain_name" "php_version" "$php_version"
+
+    # Database
+    db_name_default="${domain_name//[.-]/_}_db"
+    read -p "MySQL database name for $domain_name (default: $db_name_default): " db_name
+    db_name=${db_name:-$db_name_default}
+    store_domain_setting "$domain_name" "mysql_db_name" "$db_name"
+
+    db_user_default="${domain_name//[.-]/_}_user"
+    read -p "MySQL username for $domain_name (default: $db_user_default): " db_user
+    db_user=${db_user:-$db_user_default}
+    store_domain_setting "$domain_name" "mysql_db_user" "$db_user"
+
+    read -p "MySQL password for $domain_name (or 'generate'): " db_password_input
+    if [[ "$db_password_input" == "generate" ]]; then
+        db_password=$(generate_secure_password)
+        print_message "green" "Generated MySQL password for $domain_name: $db_password (save this)"
+    elif [[ -n "$db_password_input" ]]; then
+        db_password="$db_password_input"
+    else
+        db_password=$(generate_secure_password) # Gera se vazio também
+        print_message "green" "Generated MySQL password for $domain_name (empty input): $db_password (save this)"
+    fi
+    store_domain_setting "$domain_name" "mysql_db_password" "$db_password"
+
+    # Nginx settings
+    read -p "Nginx client_max_body_size for $domain_name (e.g., 64M, default: 10M): " nginx_client_max_body_size
+    store_domain_setting "$domain_name" "nginx_client_max_body_size" "${nginx_client_max_body_size:-10M}"
+
+    # PHP-FPM settings
+    read -p "PHP upload_max_filesize for $domain_name (e.g., 64M, default: 64M): " php_upload_max_filesize
+    store_domain_setting "$domain_name" "php_upload_max_filesize" "${php_upload_max_filesize:-64M}"
+    read -p "PHP post_max_size for $domain_name (e.g., 64M, default: 64M): " php_post_max_size
+    store_domain_setting "$domain_name" "php_post_max_size" "${php_post_max_size:-64M}"
+    read -p "PHP memory_limit for $domain_name (e.g., 256M, default: 256M): " php_memory_limit
+    store_domain_setting "$domain_name" "php_memory_limit" "${php_memory_limit:-256M}"
+    read -p "PHP max_execution_time for $domain_name (seconds, default: 300): " php_max_execution_time
+    store_domain_setting "$domain_name" "php_max_execution_time" "${php_max_execution_time:-300}"
+
+    # Store platform and domain name itself
+    store_domain_setting "$domain_name" "platform" "$platform"
+    # domain_config.domain é adicionado pelo run_playbooks.sh, mas podemos adicionar aqui também
+    store_domain_setting "$domain_name" "domain_name_explicit" "$domain_name"
+
+
+    # Multi-domain / Parked Domains
+    if ask_yes_no "Configure additional domain aliases (parked/multi-domain) for $domain_name?" "n"; then
+        store_domain_setting "$domain_name" "enable_multi_domain" "true" # Ou parked_domains
+        read -p "Enter additional domain names, comma-separated (e.g., alias1.com,www.alias2.net): " extra_domains_str
+        store_domain_setting "$domain_name" "extra_domains_list_str" "$extra_domains_str" # O playbook irá splitar
+    else
+        store_domain_setting "$domain_name" "enable_multi_domain" "false"
+    fi
+
+    # Rollback
+    if [[ "$GLOBAL_ENABLE_ROLLBACK_POLICY" == "true" ]]; then
+        if ask_yes_no "Enable pre-action backups (rollback) for $domain_name (Global policy is ON)?" "y"; then
+            store_domain_setting "$domain_name" "enable_rollback" "true"
+        else
+            store_domain_setting "$domain_name" "enable_rollback" "false"
+        fi
+    else
+         if ask_yes_no "Enable pre-action backups (rollback) for $domain_name (Global policy is OFF)?" "n"; then
+            store_domain_setting "$domain_name" "enable_rollback" "true"
+        else
+            store_domain_setting "$domain_name" "enable_rollback" "false"
+        fi
+    fi
+    
+    # Docker per domain
+    if [[ "$GLOBAL_ENABLE_DOCKER_SUPPORT" == "true" ]]; then
+        if ask_yes_no "Enable Docker container deployment for $domain_name (Docker support is globally ON)?" "n"; then
+            store_domain_setting "$domain_name" "enable_docker_domain" "true"
+            read -p "Host port to map to container's port 80 for $domain_name (e.g., 8080, must be unique): " docker_host_port
+            store_domain_setting "$domain_name" "docker_host_port" "${docker_host_port:-}" # Deixar para o usuário preencher
+        else
+            store_domain_setting "$domain_name" "enable_docker_domain" "false"
+        fi
+    fi
+
+    # Staging
+    if ask_yes_no "Enable a staging environment for $domain_name?" "n"; then
+        store_domain_setting "$domain_name" "enable_staging" "true"
+        read -p "Subdomain prefix for staging (default: staging): " staging_subdomain_prefix
+        store_domain_setting "$domain_name" "staging_subdomain_prefix" "${staging_subdomain_prefix:-staging}"
+    else
+        store_domain_setting "$domain_name" "enable_staging" "false"
+    fi
+
+    # Secure file permissions per domain
+    if [[ "$GLOBAL_SECURE_FILE_PERMISSIONS_POLICY" == "true" ]]; then
+         if ask_yes_no "Enforce secure file permissions for $domain_name (Global policy is ON)?" "y"; then
+            store_domain_setting "$domain_name" "secure_file_permissions" "true"
+        else
+            store_domain_setting "$domain_name" "secure_file_permissions" "false"
+        fi
+    else
+        if ask_yes_no "Enforce secure file permissions for $domain_name (Global policy is OFF)?" "n"; then
+            store_domain_setting "$domain_name" "secure_file_permissions" "true"
+        else
+            store_domain_setting "$domain_name" "secure_file_permissions" "false"
+        fi
+    fi
+    # Secure database per domain
+    if [[ "$GLOBAL_SECURE_DATABASE_POLICY" == "true" ]]; then
+         if ask_yes_no "Enforce secure database user privileges for $domain_name (Global policy is ON)?" "y"; then
+            store_domain_setting "$domain_name" "secure_database" "true"
+        else
+            store_domain_setting "$domain_name" "secure_database" "false"
+        fi
+    else
+        if ask_yes_no "Enforce secure database user privileges for $domain_name (Global policy is OFF)?" "n"; then
+            store_domain_setting "$domain_name" "secure_database" "true"
+        else
+            store_domain_setting "$domain_name" "secure_database" "false"
+        fi
+    fi
+
+}
+
+configure_wordpress_settings() {
+    local domain_name="$1"
+    print_message "blue" "\n--- Configuring WordPress Specific Settings for: $domain_name ---"
+
+    read -p "WordPress site title for $domain_name (default: $domain_name): " wp_title
+    store_domain_setting "$domain_name" "wordpress_title" "${wp_title:-$domain_name}"
+
+    read -p "WordPress admin username for $domain_name (default: admin): " wp_admin_user
+    store_domain_setting "$domain_name" "wordpress_admin_user" "${wp_admin_user:-admin}"
+
+    read -p "WordPress admin password for $domain_name (or 'generate'): " wp_admin_pass_input
+    if [[ "$wp_admin_pass_input" == "generate" ]]; then
+        wp_admin_password=$(generate_secure_password)
+        print_message "green" "Generated WP Admin password: $wp_admin_password (save this)"
+    elif [[ -n "$wp_admin_pass_input" ]]; then
+        wp_admin_password="$wp_admin_pass_input"
+    else
+        wp_admin_password=$(generate_secure_password) # Gera se vazio
+        print_message "green" "Generated WP Admin password (empty input): $wp_admin_password (save this)"
+    fi
+    store_domain_setting "$domain_name" "wordpress_admin_password" "$wp_admin_password"
+    # wordpress_admin_email já foi pego em configure_domain_basics e armazenado como admin_email
+    store_domain_setting "$domain_name" "wordpress_admin_email" "$(get_domain_setting "$domain_name" "admin_email")"
+
+    read -p "WordPress database table prefix for $domain_name (default: wp_): " wp_db_prefix
+    store_domain_setting "$domain_name" "wordpress_db_prefix" "${wp_db_prefix:-wp_}"
+    
+    read -p "WordPress locale (e.g. en_US, fa_IR, default: en_US): " wp_locale
+    store_domain_setting "$domain_name" "wordpress_locale" "${wp_locale:-en_US}"
+
+    # Gerar chaves de segurança do WordPress
+    print_message "yellow" "Generating WordPress security keys and salts for $domain_name..."
+    store_domain_setting "$domain_name" "wordpress_auth_key" "$(openssl rand -base64 64 | tr -d '\n\r')"
+    store_domain_setting "$domain_name" "wordpress_secure_auth_key" "$(openssl rand -base64 64 | tr -d '\n\r')"
+    store_domain_setting "$domain_name" "wordpress_logged_in_key" "$(openssl rand -base64 64 | tr -d '\n\r')"
+    store_domain_setting "$domain_name" "wordpress_nonce_key" "$(openssl rand -base64 64 | tr -d '\n\r')"
+    store_domain_setting "$domain_name" "wordpress_auth_salt" "$(openssl rand -base64 64 | tr -d '\n\r')"
+    store_domain_setting "$domain_name" "wordpress_secure_auth_salt" "$(openssl rand -base64 64 | tr -d '\n\r')"
+    store_domain_setting "$domain_name" "wordpress_logged_in_salt" "$(openssl rand -base64 64 | tr -d '\n\r')"
+    store_domain_setting "$domain_name" "wordpress_nonce_salt" "$(openssl rand -base64 64 | tr -d '\n\r')"
+
+    # WordPress Features
+    if ask_yes_no "Enable SMTP for $domain_name (using WP Mail SMTP plugin)?" "n"; then
+        store_domain_setting "$domain_name" "enable_smtp" "true"
+        # As configurações de SMTP (host, user, pass) podem ser as globais ou específicas do domínio
+        if [[ "$GLOBAL_ENABLE_SMTP_MASTER_SWITCH" == "true" ]]; then
+            if ask_yes_no "Use global SMTP settings for $domain_name?" "y"; then
+                 # Não precisa armazenar nada aqui, o playbook irá usar os fallbacks para globais
+                 : # No-op
+            else
+                read -p "Domain SMTP Host for $domain_name: " domain_smtp_host
+                store_domain_setting "$domain_name" "smtp_host" "$domain_smtp_host"
+                # ... (perguntar por port, user, pass, encryption específicos do domínio)
+            fi
+        else
+            print_message "yellow" "Global SMTP is OFF. You'll need to provide all SMTP details for $domain_name."
+            read -p "Domain SMTP Host for $domain_name: " domain_smtp_host
+            store_domain_setting "$domain_name" "smtp_host" "$domain_smtp_host"
+            # ...
+        fi
+    else
+        store_domain_setting "$domain_name" "enable_smtp" "false"
+    fi
+
+    if ask_yes_no "Enable image optimization for $domain_name (WP Smush plugin)?" "n"; then
+        store_domain_setting "$domain_name" "enable_image_optimization" "true"
+    else
+        store_domain_setting "$domain_name" "enable_image_optimization" "false"
+    fi
+
+    if [[ "$GLOBAL_ENABLE_ADVANCED_SECURITY" == "true" ]]; then
+        if ask_yes_no "Enable WordPress advanced security for $domain_name (Wordfence, if Global Adv. Security is ON)?" "y"; then
+            store_domain_setting "$domain_name" "enable_advanced_security_domain" "true" # Flag específica do domínio
+        else
+            store_domain_setting "$domain_name" "enable_advanced_security_domain" "false"
+        fi
+    else
+         if ask_yes_no "Enable WordPress advanced security for $domain_name (Wordfence, Global Adv. Security is OFF)?" "n"; then
+            store_domain_setting "$domain_name" "enable_advanced_security_domain" "true"
+        else
+            store_domain_setting "$domain_name" "enable_advanced_security_domain" "false"
+        fi
+    fi
+
+
+    if ask_yes_no "Do you plan to migrate an existing WordPress site to $domain_name later (this enables the migration playbook option)?" "n"; then
+        store_domain_setting "$domain_name" "enable_migration_placeholder" "true" # Apenas um placeholder para o run_playbooks
+        # O playbook de migração real (12-migrate-wordpress.yml) requer paths locais para os arquivos de backup
+        # que não são práticos de serem coletados aqui. Eles devem ser passados como extra-vars no momento da execução.
+        print_message "yellow" "Note: For actual migration, paths to DB and files backups must be provided as extra_vars when running the migration playbook."
+    fi
+
+    if ask_yes_no "Enable CDN for $domain_name (CDN Enabler plugin)?" "n"; then
+        store_domain_setting "$domain_name" "enable_cdn" "true"
+        read -p "CDN URL for $domain_name (e.g., https://cdn.example.com): " cdn_enabler_url
+        store_domain_setting "$domain_name" "cdn_enabler_url" "$cdn_enabler_url"
+    else
+        store_domain_setting "$domain_name" "enable_cdn" "false"
+    fi
+
+    if [[ "$GLOBAL_INSTALL_REDIS" == "true" ]]; then
+        if ask_yes_no "Enable advanced caching with Redis for $domain_name (Memcached/Redis Object Cache, Global Redis is ON)?" "y"; then
+            store_domain_setting "$domain_name" "enable_advanced_caching" "true"
+            store_domain_setting "$domain_name" "cache_type" "redis" # Ou permitir escolha
+            # Configurações de WP Redis como host/port/password podem usar os globais se não especificados aqui
+        else
+            store_domain_setting "$domain_name" "enable_advanced_caching" "false"
+        fi
+    else
+        # Poderia perguntar por Memcached aqui se Redis global não estiver ativo
+        if ask_yes_no "Enable advanced caching with Memcached for $domain_name (Global Redis is OFF)?" "n"; then
+            store_domain_setting "$domain_name" "enable_advanced_caching" "true"
+            store_domain_setting "$domain_name" "cache_type" "memcached"
+        else
+            store_domain_setting "$domain_name" "enable_advanced_caching" "false"
+        fi
+    fi
+
+
+    if ask_yes_no "Enable basic anti-hack measures for $domain_name (remove readme.html, etc.)?" "y"; then
+        store_domain_setting "$domain_name" "enable_anti_hack" "true"
+    else
+        store_domain_setting "$domain_name" "enable_anti_hack" "false"
+    fi
+}
+
+configure_laravel_settings() {
+    local domain_name="$1"
+    print_message "blue" "\n--- Configuring Laravel Specific Settings for: $domain_name ---"
+
+    read -p "Laravel App Name for $domain_name (default: $domain_name): " laravel_app_name
+    store_domain_setting "$domain_name" "laravel_app_name" "${laravel_app_name:-$domain_name}"
+
+    read -p "Laravel App Environment (production, development, local, default: production): " laravel_app_env
+    store_domain_setting "$domain_name" "laravel_app_env" "${laravel_app_env:-production}"
+    store_domain_setting "$domain_name" "laravel_admin_email" "$(get_domain_setting "$domain_name" "admin_email")"
+
+    # APP_KEY será gerado pelo playbook se não fornecido ou vazio
+    if ask_yes_no "Generate APP_KEY now (recommended) or let the playbook handle it for $domain_name?" "y"; then
+        app_key="base64:$(openssl rand -base64 32)"
+        store_domain_setting "$domain_name" "laravel_app_key" "$app_key"
+        print_message "green" "Generated APP_KEY for $domain_name: $app_key (save this)"
+    else
+        store_domain_setting "$domain_name" "laravel_app_key" "" # Playbook irá gerar
+    fi
+    
+    if [[ "$GLOBAL_INSTALL_REDIS" == "true" ]]; then
+        if ask_yes_no "Use Redis for Laravel caching/session/queue for $domain_name (Global Redis is ON)?" "y"; then
+            store_domain_setting "$domain_name" "laravel_use_redis" "true" # Flag para o playbook de config do Laravel
+        else
+            store_domain_setting "$domain_name" "laravel_use_redis" "false"
+        fi
+    else
+        store_domain_setting "$domain_name" "laravel_use_redis" "false" # Não pode usar se não estiver instalado
+    fi
+
+
+    # Laravel Features
+    if ask_yes_no "Enable Laravel Scheduler for $domain_name?" "n"; then
+        store_domain_setting "$domain_name" "enable_scheduler" "true"
+    else
+        store_domain_setting "$domain_name" "enable_scheduler" "false"
+    fi
+
+    if ask_yes_no "Enable Laravel Queue Workers for $domain_name?" "n"; then
+        store_domain_setting "$domain_name" "enable_queue" "true"
+        read -p "Default queue driver for $domain_name (database, redis, sync, default: database): " queue_driver
+        store_domain_setting "$domain_name" "queue_driver" "${queue_driver:-database}"
+    else
+        store_domain_setting "$domain_name" "enable_queue" "false"
+    fi
+
+    if [[ "$(get_domain_setting "$domain_name" "enable_queue")" == "true" ]]; then
+        if ask_yes_no "Enable Laravel Horizon for $domain_name (requires Redis for queue)?" "n"; then
+            store_domain_setting "$domain_name" "enable_horizon" "true"
+            if [[ "$(get_domain_setting "$domain_name" "laravel_use_redis")" != "true" && "$(get_domain_setting "$domain_name" "queue_driver")" != "redis" ]]; then
+                 print_message "yellow" "Warning: Horizon works best with Redis. Ensure your queue connection is Redis."
+            fi
+        else
+            store_domain_setting "$domain_name" "enable_horizon" "false"
+        fi
+    else
+        store_domain_setting "$domain_name" "enable_horizon" "false" # Não pode habilitar Horizon sem queue
+    fi
+
+    if ask_yes_no "Enable Laravel Octane for $domain_name?" "n"; then
+        store_domain_setting "$domain_name" "enable_octane" "true"
+        read -p "Octane server for $domain_name (swoole, roadrunner, default: swoole): " octane_server
+        store_domain_setting "$domain_name" "octane_server" "${octane_server:-swoole}"
+        read -p "Octane service host (default: 127.0.0.1): " octane_service_host
+        store_domain_setting "$domain_name" "octane_service_host" "${octane_service_host:-127.0.0.1}"
+        read -p "Octane service port (default: 8000): " octane_service_port
+        store_domain_setting "$domain_name" "octane_service_port" "${octane_service_port:-8000}"
+    else
+        store_domain_setting "$domain_name" "enable_octane" "false"
+    fi
+
+    if ask_yes_no "Enable Laravel WebSockets for $domain_name (beyondcode/laravel-websockets)?" "n"; then
+        store_domain_setting "$domain_name" "enable_websockets" "true"
+        read -p "WebSockets service host (e.g., 0.0.0.0, default: 0.0.0.0): " websockets_service_host
+        store_domain_setting "$domain_name" "websockets_service_host" "${websockets_service_host:-0.0.0.0}"
+        read -p "WebSockets service port (default: 6001): " websockets_service_port
+        store_domain_setting "$domain_name" "websockets_service_port" "${websockets_service_port:-6001}"
+    else
+        store_domain_setting "$domain_name" "enable_websockets" "false"
+    fi
+
+    if ask_yes_no "Enable Laravel Telescope for $domain_name (development tool)?" "n"; then
+        store_domain_setting "$domain_name" "enable_telescope" "true"
+        read -p "Telescope dashboard path for $domain_name (default: telescope): " telescope_path
+        store_domain_setting "$domain_name" "telescope_path" "${telescope_path:-telescope}"
+        if [[ "$(get_domain_setting "$domain_name" "laravel_app_env")" == "production" ]]; then
+            if ask_yes_no "Allow Telescope in production for $domain_name (SECURITY RISK: exposes data)?" "n"; then
+                store_domain_setting "$domain_name" "telescope_allow_in_production" "true"
+            else
+                store_domain_setting "$domain_name" "telescope_allow_in_production" "false"
+            fi
+        fi
+    else
+        store_domain_setting "$domain_name" "enable_telescope" "false"
+    fi
+
+    if ask_yes_no "Enable API features for $domain_name (Sanctum for auth, Scribe for docs)?" "n"; then
+        store_domain_setting "$domain_name" "enable_api" "true"
+        if ask_yes_no "Enable API authentication (Laravel Sanctum) for $domain_name?" "y"; then
+            store_domain_setting "$domain_name" "enable_api_auth" "true"
+        else
+            store_domain_setting "$domain_name" "enable_api_auth" "false"
+        fi
+        if ask_yes_no "Enable API documentation (Scribe) for $domain_name?" "n"; then
+            store_domain_setting "$domain_name" "enable_api_docs" "true"
+        else
+            store_domain_setting "$domain_name" "enable_api_docs" "false"
+        fi
+    else
+        store_domain_setting "$domain_name" "enable_api" "false"
+    fi
+}
+
+# --- Geração do YAML ---
+generate_yaml_config() {
+    local yaml_output=""
+    yaml_output+="---\n"
+    yaml_output+="# Ansible Group Vars - Generated by generate_config.sh\n\n"
+
+    # Global settings
+    yaml_output+="# Global Server Settings\n"
+    yaml_output+="GLOBAL_LINUX_USERNAME: \"${GLOBAL_LINUX_USERNAME}\"\n"
+    yaml_output+="GLOBAL_PHP_DEFAULT_VERSION: \"${GLOBAL_PHP_DEFAULT_VERSION}\"\n"
+    yaml_output+="GLOBAL_MYSQL_ROOT_PASSWORD: \"${GLOBAL_MYSQL_ROOT_PASSWORD}\"\n" # Será usado por playbooks
+    yaml_output+="GLOBAL_ENABLE_PHP_VERSIONS_MANAGEMENT: ${GLOBAL_ENABLE_PHP_VERSIONS_MANAGEMENT}\n"
+    if [[ "$GLOBAL_ENABLE_PHP_VERSIONS_MANAGEMENT" == "true" ]]; then
+        yaml_output+="GLOBAL_PHP_ADDITIONAL_VERSIONS_STRING: \"${GLOBAL_PHP_ADDITIONAL_VERSIONS_STRING}\"\n"
+    fi
+    yaml_output+="GLOBAL_LETSENCRYPT_DEFAULT_EMAIL: \"${GLOBAL_LETSENCRYPT_DEFAULT_EMAIL}\"\n"
+    yaml_output+="GLOBAL_LETSENCRYPT_TEST_CERT: ${GLOBAL_LETSENCRYPT_TEST_CERT}\n\n"
+
+
+    yaml_output+="# Global Service Settings\n"
+    yaml_output+="GLOBAL_INSTALL_REDIS: ${GLOBAL_INSTALL_REDIS}\n"
+    if [[ "$GLOBAL_INSTALL_REDIS" == "true" ]]; then
+        yaml_output+="GLOBAL_REDIS_HOST: \"${GLOBAL_REDIS_HOST}\"\n"
+        yaml_output+="GLOBAL_REDIS_PORT: ${GLOBAL_REDIS_PORT}\n"
+        [[ -n "$GLOBAL_REDIS_PASSWORD" ]] && yaml_output+="GLOBAL_REDIS_PASSWORD: \"${GLOBAL_REDIS_PASSWORD}\"\n"
+    fi
+    yaml_output+="GLOBAL_ENABLE_SMTP_MASTER_SWITCH: ${GLOBAL_ENABLE_SMTP_MASTER_SWITCH}\n"
+    if [[ "$GLOBAL_ENABLE_SMTP_MASTER_SWITCH" == "true" ]]; then
+        yaml_output+="GLOBAL_SMTP_HOST: \"${GLOBAL_SMTP_HOST}\"\n"
+        yaml_output+="GLOBAL_SMTP_PORT: ${GLOBAL_SMTP_PORT}\n"
+        [[ -n "$GLOBAL_SMTP_USERNAME" ]] && yaml_output+="GLOBAL_SMTP_USERNAME: \"${GLOBAL_SMTP_USERNAME}\"\n"
+        [[ -n "$GLOBAL_SMTP_PASSWORD" ]] && yaml_output+="GLOBAL_SMTP_PASSWORD: \"${GLOBAL_SMTP_PASSWORD}\"\n"
+        yaml_output+="GLOBAL_SMTP_ENCRYPTION: \"${GLOBAL_SMTP_ENCRYPTION}\"\n"
+    fi
+    yaml_output+="\n"
+
+    yaml_output+="# Global Security Features\n"
+    yaml_output+="GLOBAL_FAIL2BAN_ENABLED: ${GLOBAL_FAIL2BAN_ENABLED}\n"
+    if [[ "$GLOBAL_FAIL2BAN_ENABLED" == "true" ]]; then
+        yaml_output+="GLOBAL_FAIL2BAN_DEFAULT_MAXRETRY: ${GLOBAL_FAIL2BAN_DEFAULT_MAXRETRY}\n"
+        yaml_output+="GLOBAL_FAIL2BAN_DEFAULT_FINDTIME: \"${GLOBAL_FAIL2BAN_DEFAULT_FINDTIME}\"\n"
+        yaml_output+="GLOBAL_FAIL2BAN_DEFAULT_BANTIME: \"${GLOBAL_FAIL2BAN_DEFAULT_BANTIME}\"\n"
+    fi
+    yaml_output+="GLOBAL_ENABLE_WAF_DEFAULT: ${GLOBAL_ENABLE_WAF_DEFAULT}\n"
+    yaml_output+="GLOBAL_SECURE_FILE_PERMISSIONS_POLICY: ${GLOBAL_SECURE_FILE_PERMISSIONS_POLICY}\n"
+    yaml_output+="GLOBAL_SECURE_DATABASE_POLICY: ${GLOBAL_SECURE_DATABASE_POLICY}\n"
+    yaml_output+="GLOBAL_SECURITY_AUDIT_POLICY: ${GLOBAL_SECURITY_AUDIT_POLICY}\n"
+    yaml_output+="GLOBAL_ENABLE_ADVANCED_SECURITY: ${GLOBAL_ENABLE_ADVANCED_SECURITY}\n\n"
+
+
+    yaml_output+="# Global Operational Features\n"
+    yaml_output+="GLOBAL_ENABLE_BACKUPS_MASTER_SWITCH: ${GLOBAL_ENABLE_BACKUPS_MASTER_SWITCH}\n"
+    if [[ "$GLOBAL_ENABLE_BACKUPS_MASTER_SWITCH" == "true" ]]; then
+        yaml_output+="GLOBAL_BACKUP_BASE_DIR: \"${GLOBAL_BACKUP_BASE_DIR}\"\n"
+        yaml_output+="GLOBAL_BACKUP_DEFAULT_FREQ: \"${GLOBAL_BACKUP_DEFAULT_FREQ}\"\n"
+    fi
+    yaml_output+="GLOBAL_ENABLE_MONITORING_TOOLS: ${GLOBAL_ENABLE_MONITORING_TOOLS}\n"
+    yaml_output+="GLOBAL_ENABLE_DOCKER_SUPPORT: ${GLOBAL_ENABLE_DOCKER_SUPPORT}\n"
+    yaml_output+="GLOBAL_ENABLE_ROLLBACK_POLICY: ${GLOBAL_ENABLE_ROLLBACK_POLICY}\n"
+    if [[ "$GLOBAL_ENABLE_ROLLBACK_POLICY" == "true" ]]; then
+        yaml_output+="GLOBAL_PRE_ACTION_BACKUP_DIR: \"${GLOBAL_PRE_ACTION_BACKUP_DIR}\"\n"
+    fi
+    yaml_output+="GLOBAL_ENABLE_MULTILINGUAL_DOCS: ${GLOBAL_ENABLE_MULTILINGUAL_DOCS}\n"
+    if [[ "$GLOBAL_ENABLE_MULTILINGUAL_DOCS" == "true" ]]; then
+        yaml_output+="GLOBAL_DOC_LANGUAGES_LIST: [${GLOBAL_DOC_LANGUAGES_LIST//,/\",\"}]\n" # Converte para lista YAML
+    fi
+    yaml_output+="\n"
+
+
+    # Domain configurations
+    yaml_output+="domains:\n"
+    for domain_item in "${DOMAINS[@]}"; do
+        yaml_output+="  ${domain_item}:\n"
+        # Iterar sobre todas as chaves armazenadas para este domínio
+        for key_full in "${!DOMAIN_CONFIGS[@]}"; do
+            if [[ "$key_full" == "${domain_item}___"* ]]; then
+                local setting_key="${key_full#*___}" # Remove o prefixo "dominio___"
+                local setting_value="${DOMAIN_CONFIGS[$key_full]}"
+                
+                # Determinar se o valor precisa de aspas
+                if [[ "$setting_value" == "true" || "$setting_value" == "false" || "$setting_value" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+                    yaml_output+="    ${setting_key}: ${setting_value}\n"
+                elif [[ -z "$setting_value" ]]; then # Valor vazio, pode ser 'null' ou string vazia
+                    yaml_output+="    ${setting_key}: \"\"\n" # Ou null, dependendo da necessidade
+                else
+                    # Escapar aspas simples dentro do valor se estiver usando aspas simples para string YAML
+                    # setting_value_escaped="${setting_value//\'/\'\'}"
+                    # yaml_output+="    ${setting_key}: '${setting_value_escaped}'\n"
+                    # É mais seguro usar aspas duplas e escapar caracteres especiais se necessário, mas para este script,
+                    # assumimos que valores complexos não são inseridos diretamente ou são tratados pelos playbooks.
+                    yaml_output+="    ${setting_key}: \"${setting_value}\"\n"
+                fi
+            fi
+        done
+    done
+
+    echo -e "$yaml_output"
+}
+
+# --- Função Principal ---
+main() {
+    print_message "green" "=== Ansible Configuration Generator ==="
+    print_message "yellow" "This script will guide you through setting up global and per-domain configurations."
+
+    if [ -f "$CONFIG_FILE" ]; then
+        if ! ask_yes_no "Configuration file '$CONFIG_FILE' already exists. Overwrite it?" "n"; then
+            print_message "red" "Configuration generation aborted by user."
+            exit 0
+        else
+            print_message "yellow" "Backing up existing configuration to ${CONFIG_FILE}.bak"
+            cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
+        fi
+    fi
+
+    # Coletar configurações globais primeiro
+    configure_global_server_settings
+    configure_global_services
+    configure_global_security_features
+    configure_global_operational_features
+
+    # Coletar configurações por domínio
+    print_message "blue" "\n--- Domain Configuration ---"
+    local first_domain=true
+    while true; do
+        if [[ "$first_domain" == "true" ]]; then
+            read -p "Enter the primary domain name for your first site (e.g., example.com): " domain_name
+        else
+            read -p "Enter another domain name, or leave empty to finish adding domains: " domain_name
+        fi
+
+        if [[ -z "$domain_name" && "$first_domain" == "false" ]]; then
+            break # Termina se o nome do domínio for vazio e não for o primeiro domínio
+        elif [[ -z "$domain_name" && "$first_domain" == "true" ]]; then
+            print_message "red" "You must configure at least one domain."
+            continue
+        fi
+        
+        if ! validate_domain_name "$domain_name"; then
+            print_message "red" "Invalid domain name format. Please try again."
+            continue
+        fi
+
+        # Verifica se o domínio já foi adicionado
+        local domain_exists=false
+        for existing_domain in "${DOMAINS[@]}"; do
+            if [[ "$existing_domain" == "$domain_name" ]]; then
+                domain_exists=true
+                break
+            fi
+        done
+        if [[ "$domain_exists" == "true" ]]; then
+            print_message "red" "Domain '$domain_name' has already been configured. Enter a different domain."
+            continue
+        fi
+
+
+        echo "Select platform for $domain_name:"
+        echo "  1) WordPress"
+        echo "  2) Laravel"
+        read -p "Platform choice [1-2] (default: 1): " platform_choice
+        local platform
+        case "$platform_choice" in
+            1) platform="wordpress" ;;
+            2) platform="laravel" ;;
+            *) platform="wordpress" ;; # Padrão para WordPress
+        esac
+
+        DOMAINS+=("$domain_name") # Adiciona à lista de domínios
+        DOMAIN_PLATFORMS["$domain_name"]="$platform" # Armazena a plataforma (não usado diretamente no YAML final, mas útil durante o script)
+
+        configure_domain_basics "$domain_name" "$platform"
+        if [[ "$platform" == "wordpress" ]]; then
+            configure_wordpress_settings "$domain_name"
+        elif [[ "$platform" == "laravel" ]]; then
+            configure_laravel_settings "$domain_name"
+        fi
+        
+        print_message "green" "Configuration for domain '$domain_name' completed."
+        first_domain=false
+    done
+    
+    if [ ${#DOMAINS[@]} -eq 0 ]; then
+        print_message "red" "No domains were configured. Exiting."
         exit 1
     fi
 
-    CHOICE=$(cat "$TEMP_FILE")
+    # Gerar e salvar o arquivo YAML
+    print_message "blue" "\nGenerating YAML configuration file..."
+    generated_yaml=$(generate_yaml_config)
+    echo "$generated_yaml" > "$CONFIG_FILE"
 
-    case $CHOICE in
-        1) domain_settings ;;
-        2)
-            if [ -z "$DOMAINS" ]; then
-                dialog --title "Error" --msgbox "Please configure domains first (Option 1)." 8 50
-            else
-                for domain_item in $DOMAINS; do
-                    basic_settings "$domain_item"
-                done
-            fi
-            ;;
-        3) security_settings ;;
-        4) performance_settings ;;
-        5) plugins_themes ;;
-        6) backup_migration ;;
-        7) advanced_features ;;
-        8)
-            if [ -z "$DOMAINS" ]; then
-                 dialog --title "Error" --msgbox "No domains configured. Please add domains via 'Domain Settings' first." 8 60
-            else
-                generate_config; break
-            fi
-            ;;
-        *) # This case handles empty $CHOICE if dialog somehow failed to write to TEMP_FILE or if $CHOICE_RTN_CODE was unexpected
-            cleanup
-            echo "Invalid choice or configuration flow error. Exiting."
-            exit 1
-            ;;
-    esac
-done
+    print_message "green" "\nConfiguration generation complete!"
+    print_message "green" "File saved to: $CONFIG_FILE"
+    print_message "blue" "You can now review '$CONFIG_FILE' and then run './run_playbooks.sh' to apply the configuration."
+}
 
-echo "Configuration generated successfully in $OUTPUT_FILE"
-# ... (rest of summary as before)
-# Display a summary of the configuration
-echo "Configuration Summary:"
-echo "======================"
-echo "Domains configured: $DOMAINS"
-
-for domain_key_summary in $DOMAINS; do
-    echo ""
-    echo "Domain: $domain_key_summary"
-    echo "  Platform: ${DOMAIN_PLATFORMS[$domain_key_summary]:-N/A}" # Added default for safety
-done
-
-echo ""
-echo "======================"
-echo "Configuration file has been saved to: $OUTPUT_FILE"
-echo "Remember to review and secure any sensitive data in this file (e.g., using Ansible Vault)."
-echo "You may need to adjust your Ansible playbooks to work with the per-domain platform structure."
-echo "Thank you for using the Web Platform Configuration Generator!"
+# Executar a função principal
+main

@@ -1,0 +1,68 @@
+# inventory
+
+# ----------------------------------------------------------------------------------
+# سناریو ۱: اجرای همه چیز روی ماشین محلی (جایی که Ansible نصب است)
+# ----------------------------------------------------------------------------------
+# این گروه برای زمانی مناسب است که شما سرور را مستقیماً روی همان ماشین
+# مدیریت می‌کنید که Ansible روی آن قرار دارد.
+# [local_server]
+# localhost ansible_connection=local ansible_python_interpreter=/usr/bin/python3
+
+# اگر می‌خواهید فقط از localhost استفاده کنید و هیچ گروهی تعریف نکنید،
+# می‌توانید فقط خط زیر را قرار دهید:
+localhost ansible_connection=local ansible_python_interpreter=/usr/bin/python3
+
+# ----------------------------------------------------------------------------------
+# سناریو ۲: اجرای روی یک یا چند سرور ریموت
+# ----------------------------------------------------------------------------------
+# فرض کنید یک گروه سرور وب به نام 'webservers' دارید.
+# [webservers]
+# server1.example.com ansible_user=your_ssh_user ansible_ssh_private_key_file=~/.ssh/id_rsa
+# server2.example.com ansible_user=your_ssh_user ansible_ssh_private_key_file=~/.ssh/id_rsa
+# 192.168.1.100       ansible_user=your_ssh_user ansible_port=2222 ansible_ssh_pass=VERY_SECRET_PASSWORD # استفاده از پسورد توصیه نمی‌شود
+
+# می‌توانید متغیرهای مشترک برای گروه را اینجا تعریف کنید:
+# [webservers:vars]
+# ansible_become=true # اگر نیاز است که تسک‌ها با sudo اجرا شوند
+# default_php_version_for_group="8.1"
+
+# ----------------------------------------------------------------------------------
+# سناریو ۳: گروه‌بندی برای پلتفرم‌های مختلف یا محیط‌های مختلف
+# ----------------------------------------------------------------------------------
+# [wordpress_servers]
+# wp_server1.example.com
+# wp_server2.example.com
+
+# [laravel_servers]
+# laravel_server1.example.com
+
+# [wordpress_servers:vars]
+# platform_type="wordpress"
+
+# [laravel_servers:vars]
+# platform_type="laravel"
+
+# [all:vars]
+# این متغیرها برای تمام هاست‌ها اعمال می‌شوند مگر اینکه override شوند.
+# ansible_user=default_user_for_all_hosts
+# ansible_python_interpreter=/usr/bin/python3
+# ansible_become=true # اگر اکثر تسک‌ها نیاز به sudo دارند
+
+# ----------------------------------------------------------------------------------
+# نکته مهم برای پروژه شما:
+# ----------------------------------------------------------------------------------
+# با توجه به اینکه Playbookها و اسکریپت‌های شما (مانند run_playbooks.sh)
+# به نظر می‌رسد برای مدیریت یک سرور واحد (که می‌تواند localhost یا یک ریموت باشد)
+# طراحی شده‌اند و پیکربندی‌ها از group_vars/all.yml خوانده می‌شوند،
+# ساده‌ترین inventory برای شروع کار، استفاده از همان localhost است:
+#
+# localhost ansible_connection=local ansible_python_interpreter=/usr/bin/python3
+#
+# اگر می‌خواهید روی یک سرور ریموت مشخص اجرا کنید، می‌توانید آن را مستقیماً نام ببرید:
+#
+# my_remote_server_ip_or_dns ansible_user=your_ssh_user ansible_become=true
+#
+# و سپس در زمان اجرای run_playbooks.sh، اسکریپت از این inventory استفاده خواهد کرد.
+# Playbook `site.yml` شما نیز با `hosts: all` شروع می‌شود ،
+# که به معنی اجرای روی تمام هاست‌های تعریف شده در inventory است.
+# اگر فقط یک هاست (مثلاً localhost) در inventory باشد، روی همان اجرا می‌شود.

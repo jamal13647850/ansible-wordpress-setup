@@ -2,81 +2,93 @@
 - hosts: all
   become: true
   vars:
-    # Define the effective MySQL root password.
-    # It prioritizes domain_config, then a global variable (to be defined in group_vars/all.yml eventually),
-    # and finally a playbook-level default if absolutely nothing is set (though this default is less secure for root).
-    # For production, GLOBAL_MYSQL_ROOT_PASSWORD should be securely vaulted and set.
-    # The domain_config.mysql_root_password is currently set by generate_config.sh for each domain,
-    # but it should represent the single, actual root password of the MySQL server.
-    effective_mysql_root_password: "{{ domain_config.mysql_root_password | default(GLOBAL_MYSQL_ROOT_PASSWORD | default('ChangemeRootPasswordPlease')) }}"
+    # effective_mysql_root_password: "{{ domain_config.mysql_root_password | default(GLOBAL_MYSQL_ROOT_PASSWORD | default('ChangemeRootPasswordPlease')) }}" # [cite: 652]
+    # A generate_config.sh atualizado deve garantir que GLOBAL_MYSQL_ROOT_PASSWORD ou domain_config.mysql_root_password esteja definido.
+    # Se não, o playbook falhará ou usará um valor inseguro.
+    # Vamos assumir que domain_config.mysql_root_password é preenchido por generate_config.sh se o global não estiver.
+    # Ou que o global SEMPRE é definido.
+    # Para segurança, é crucial que esta senha seja forte e definida.
+    _effective_mysql_root_password: "{{ domain_config.mysql_root_password | default(GLOBAL_MYSQL_ROOT_PASSWORD | default(omit)) }}"
 
-    # Application-specific DB credentials will come directly from domain_config
-    app_db_name: "{{ domain_config.mysql_db_name }}"
-    app_db_user: "{{ domain_config.mysql_db_user }}"
-    app_db_password: "{{ domain_config.mysql_db_password }}"
+
+    app_db_name: "{{ domain_config.mysql_db_name }}" # [cite: 652]
+    app_db_user: "{{ domain_config.mysql_db_user }}" # [cite: 652]
+    app_db_password: "{{ domain_config.mysql_db_password }}" # [cite: 652]
+
+    # Privilégios mais restritos para o usuário da aplicação
+    # Estes são geralmente suficientes para a maioria das aplicações web (WordPress, Laravel)
+    # incluindo instalação, migrations, e operações CRUD.
+    app_user_privileges: "SELECT,INSERT,UPDATE,DELETE,CREATE,ALTER,DROP,INDEX,REFERENCES,CREATE TEMPORARY TABLES,LOCK TABLES,TRIGGER"
 
   tasks:
-    - name: Install MySQL Python interface modules
+    - name: "Fail if MySQL root password is not properly set"
+      ansible.builtin.fail:
+        msg: "MySQL root password (domain_config.mysql_root_password or GLOBAL_MYSQL_ROOT_PASSWORD) is not defined. Please set it in group_vars/all.yml or ensure generate_config.sh sets it."
+      when: _effective_mysql_root_password is ansible.builtin.omit
+
+    - name: "Install MySQL Python interface modules (pymysql is preferred)"
       ansible.builtin.apt:
         name:
-          - python3-mysqldb
-          - python3-pymysql # PyMySQL is often preferred
+          # - python3-mysqldb # Pode causar problemas com ansible_user=root e auth_socket. Pymysql é mais flexível.
+          - python3-pymysql
         state: present
-        update_cache: yes # Run update_cache before installing packages
+        update_cache: yes
       tags: ['mysql', 'deps']
 
-    - name: Install MySQL server package
+    - name: "Install MySQL server package"
       ansible.builtin.apt:
         name: mysql-server
         state: present
-      tags: ['mysql', 'install']
+      tags: ['mysql', 'install'] # [cite: 653]
 
-    - name: Ensure MySQL service is started and enabled
+    - name: "Ensure MySQL service is started and enabled"
       ansible.builtin.systemd:
-        name: mysql # Or mysqld on some systems, but mysql is common for systemd service name
+        name: mysql # O nome do serviço pode variar (ex: mysqld), mas 'mysql' é comum no Debian/Ubuntu
         state: started
         enabled: yes
       tags: ['mysql', 'service']
 
-    - name: Set/Update MySQL root password
+    - name: "Set/Update MySQL root password"
       community.mysql.mysql_user:
+        login_unix_socket: /var/run/mysqld/mysqld.sock # Usar socket para o primeiro setup do root é mais seguro
         name: root
-        password: "{{ effective_mysql_root_password }}"
+        password: "{{ _effective_mysql_root_password }}"
         host: localhost
-        login_unix_socket: /var/run/mysqld/mysqld.sock # Path for Debian/Ubuntu
-        # check_implicit_admin: yes # Ensures this task can be run by a user with sufficient privileges via socket
         state: present
-      tags: ['mysql', 'config', 'security']
-      # This task is idempotent. It will only make changes if the root password is not already set to effective_mysql_root_password.
+        # check_implicit_admin: true # Garante que o usuário root tenha privilégios de admin
+      no_log: true # Não logar a senha
+      tags: ['mysql', 'config', 'security'] # [cite: 654]
 
-    - name: Create the application database for domain {{ domain_config.domain }}
+    - name: "Create the application database for domain {{ domain_config.domain }}"
       community.mysql.mysql_db:
         login_user: root
-        login_password: "{{ effective_mysql_root_password }}"
+        login_password: "{{ _effective_mysql_root_password }}"
         name: "{{ app_db_name }}"
         state: present
-      tags: ['mysql', 'db_setup']
+      no_log: true
+      tags: ['mysql', 'db_setup'] # [cite: 655]
 
-    - name: Create the application database user for {{ domain_config.domain }}
+    - name: "Create the application database user for {{ domain_config.domain }} with limited privileges"
       community.mysql.mysql_user:
         login_user: root
-        login_password: "{{ effective_mysql_root_password }}"
+        login_password: "{{ _effective_mysql_root_password }}"
         name: "{{ app_db_user }}"
         password: "{{ app_db_password }}"
-        priv: "{{ app_db_name }}.*:ALL" # Grant all privileges on the specific application database
-        host: "localhost" # More secure than '%' if application is on the same server
+        priv: "{{ app_db_name }}.*:{{ app_user_privileges }}" # Aplicando privilégios restritos [cite: 656]
+        host: "localhost" # Restringir ao host local por padrão
         state: present
+      no_log: true
       tags: ['mysql', 'db_user_setup']
 
-    - name: Display MySQL version (for informational purposes)
+    - name: "Display MySQL version (for informational purposes)"
       ansible.builtin.command: "mysql --version"
       register: mysql_version_output
-      changed_when: false # This command does not change state
-      check_mode: false # Always run this, even in check mode, as it's read-only
+      changed_when: false
+      check_mode: false # Executar mesmo em check_mode para obter a informação
       tags: ['mysql', 'info']
 
-    - name: Print MySQL version (if verbosity is high)
+    - name: "Print MySQL version (if verbosity is high)"
       ansible.builtin.debug:
         msg: "MySQL Server Version: {{ mysql_version_output.stdout }}"
       when: ansible_verbosity > 1
-      tags: ['mysql', 'info']
+      tags: ['mysql', 'info'] # [cite: 657]

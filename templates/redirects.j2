@@ -1,3 +1,11 @@
-location /product/oral-test-1/ {
-        return 301 https://{{ domain }}/oral-test/;
+{# templates/redirects.j2 - Refactored for single domain_config #}
+# Example redirect:
+# location /product/old-product/ {
+# return 301 https://{{ domain_config.domain }}/new-product/;
+# }
+
+# Original content, now using domain_config.domain
+location /product/oral-test-1/ { # [cite: 355]
+        return 301 https://{{ domain_config.domain }}/oral-test/; # [cite: 356]
 }
+# Add more redirects below as needed, using {{ domain_config.domain }}
