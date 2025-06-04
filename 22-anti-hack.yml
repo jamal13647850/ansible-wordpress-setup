@@ -1,11 +1,47 @@
+# 22-anti-hack.yml
 - hosts: all
   become: true
+  vars:
+    # Determine if anti-hack measures are enabled for this run
+    effective_enable_anti_hack: "{{ domain_config.enable_anti_hack | default(GLOBAL_ENABLE_ANTI_HACK_POLICY | default(false)) }}"
+
+    # Application webroot path
+    app_webroot_path: "/var/www/{{ domain_config.domain }}/html"
+
+    # List of common files to remove for WordPress for minor hardening
+    wordpress_files_to_remove:
+      - readme.html
+      - license.txt
+      - wp-config-sample.php # Often not in live webroot, but good to ensure its absence
+
+    # Example for other platforms (currently not used but shows extensibility)
+    # laravel_files_to_remove:
+    #   - "server.php" # If deploying to Nginx/Apache and not using 'php artisan serve'
+
+  # This entire playbook should only run if anti-hack measures are enabled.
+  when: effective_enable_anti_hack | bool
+
   tasks:
-    - name: Remove unnecessary files
-      file:
-        path: "/var/www/{{ domain }}/html/{{ item }}"
+    - name: "Remove unnecessary/informational files for WordPress site: {{ domain_config.domain }}"
+      ansible.builtin.file:
+        path: "{{ app_webroot_path }}/{{ item }}"
         state: absent
-      loop:
-        - readme.html
-        - license.txt
-      when: enable_anti_hack | bool
+      loop: "{{ wordpress_files_to_remove }}"
+      when: domain_config.platform == "wordpress"
+      tags: ['security', 'hardening', 'wordpress', 'anti_hack', 'domain_specific']
+      # Note: This is a minor security measure (security through obscurity).
+
+    # Add other platform-specific file removal tasks here if needed for other platforms
+    # Example for Laravel (currently commented out):
+    # - name: "Remove unnecessary files for Laravel site: {{ domain_config.domain }}"
+    #   ansible.builtin.file:
+    #     path: "{{ app_webroot_path }}/{{ item }}" # Laravel's webroot is typically /public
+    #     state: absent
+    #   loop: "{{ laravel_files_to_remove }}"
+    #   when: domain_config.platform == "laravel"
+    #   tags: ['security', 'hardening', 'laravel', 'anti_hack', 'domain_specific']
+
+    - name: "Anti-Hack measures completed (or skipped) for {{ domain_config.domain }}"
+      ansible.builtin.debug:
+        msg: "Anti-hack file removal (if applicable for platform {{ domain_config.platform }}) processed for {{ domain_config.domain }}."
+      tags: ['security', 'hardening', 'info']

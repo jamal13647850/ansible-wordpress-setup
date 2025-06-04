@@ -1,9 +1,82 @@
+# 19-manage-php.yml
 - hosts: all
   become: true
+  vars:
+    # Determine if management of additional PHP versions is enabled
+    effective_enable_php_versions: "{{ domain_config.enable_php_versions | default(GLOBAL_ENABLE_PHP_VERSIONS_MANAGEMENT | default(false)) }}"
+
+    # Get the list of additional PHP versions to install.
+    # Expects a comma-separated string from domain_config or a global var.
+    _php_additional_versions_str: "{{ domain_config.php_additional_versions | default(GLOBAL_PHP_ADDITIONAL_VERSIONS_STRING | default('')) }}"
+    # Convert comma-separated string to a clean list, removing empty items.
+    effective_php_additional_versions_list: "{{ _php_additional_versions_str.split(',') | map('trim') | reject('==', '') | list }}"
+
+    # Define a list of common PHP extensions to install for each additional version.
+    # This list itself could be a global variable, e.g., GLOBAL_PHP_COMMON_EXTENSIONS_FOR_ADDITIONAL_VERSIONS
+    php_common_extensions_for_additional:
+      - fpm
+      - cli
+      - common
+      - mysql
+      - xml
+      - curl
+      - gd
+      - imagick
+      - mbstring
+      - opcache
+      - zip
+      - intl
+      - bcmath
+      - gmp
+      - soap
+      - redis # Common if Redis is used across sites
+
+  # This entire playbook should only run if management of additional PHP versions is enabled
+  # and there's actually a list of versions to install.
+  when:
+    - effective_enable_php_versions | bool
+    - effective_php_additional_versions_list | length > 0
+
   tasks:
-    - name: Install additional PHP versions
-      apt:
-        name: "php{{ item }}"
+    - name: "Ensure Ondrej Sury PHP PPA is present (as it's a common source for multiple PHP versions)"
+      ansible.builtin.apt_repository:
+        repo: ppa:ondrej/php
         state: present
-      loop: "{{ php_additional_versions.split(',') }}"
-      when: enable_php_versions | bool
+        update_cache: no # Assume cache is updated by other playbooks or a dedicated first step
+      tags: ['php', 'repo', 'prerequisites', 'system']
+      # This task is just to ensure the PPA (if used) is there; 03-install-php... also adds it.
+
+    - name: "Install additional PHP versions and their common extensions"
+      ansible.builtin.apt:
+        name: "{{ packages_to_install }}"
+        state: present
+        update_cache: yes # Update cache before installing new sets of packages
+      vars:
+        # Construct the full list of packages for the current PHP version in the outer loop
+        packages_to_install: "{{ ['php' + php_version_item] + php_common_extensions_for_additional | map('regex_replace', '^', 'php' + php_version_item + '-') | list | difference(['php' + php_version_item + '-php' + php_version_item]) }}"
+        # The 'difference' part removes potential duplicated prefix like 'php8.1-php8.1' that map might create for 'phpX.Y' itself.
+        # A simpler way for the base package might be to just list "php{{ php_version_item }}" and then loop extensions.
+        # Let's refine 'packages_to_install' for clarity:
+        # packages_to_install:
+        #   - "php{{ php_version_item }}" # Base meta-package
+        #   - "{{ php_common_extensions_for_additional | map('regex_replace', '^', 'php' + php_version_item + '-') | list }}"
+      loop: "{{ effective_php_additional_versions_list }}"
+      loop_control:
+        loop_var: php_version_item
+        label: "PHP {{ php_version_item }}"
+      tags: ['php', 'install', 'system', 'multi_version']
+      # Note: This playbook only installs these PHP versions and extensions.
+      # It does NOT configure their php.ini or FPM pool settings.
+      # That would require additional, more detailed tasks similar to 03-install-php-composer-wpcli.yml,
+      # looped for each of these additional versions.
+
+    - name: "Ensure PHP-FPM services for additionally installed versions are started and enabled"
+      ansible.builtin.systemd:
+        name: "php{{ php_version_item }}-fpm"
+        state: started
+        enabled: yes
+      loop: "{{ effective_php_additional_versions_list }}"
+      loop_control:
+        loop_var: php_version_item
+        label: "PHP-FPM {{ php_version_item }}"
+      tags: ['php', 'service', 'system', 'multi_version']

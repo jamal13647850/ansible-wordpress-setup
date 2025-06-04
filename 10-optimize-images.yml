@@ -1,14 +1,34 @@
+# 10-optimize-images.yml
 - hosts: all
   become: true
+  vars:
+    # Determine if image optimization is enabled for this run
+    effective_enable_image_optimization: "{{ domain_config.enable_image_optimization | default(GLOBAL_ENABLE_IMAGE_OPTIMIZATION | default(false)) }}"
+
+    # WordPress domain specific path
+    wp_domain_path: "/var/www/{{ domain_config.domain }}/html"
+
+  # This playbook is for WordPress and only runs if image optimization is enabled.
+  when:
+    - domain_config is defined
+    - domain_config.platform is defined and domain_config.platform == "wordpress"
+    - effective_enable_image_optimization | bool
+
   tasks:
-    - name: Install ImageMagick
-      apt:
+    - name: Install ImageMagick (system-level dependency for image processing)
+      ansible.builtin.apt:
         name: imagemagick
         state: present
-      when: enable_image_optimization | bool
+        update_cache: yes
+      tags: ['images', 'imagemagick', 'system', 'dependencies']
 
-    - name: Install Smush plugin
-      shell: wp plugin install wp-smushit --allow-root
+    - name: "Install and activate WP Smush plugin for image optimization on {{ domain_config.domain }}"
+      ansible.builtin.shell:
+        cmd: "wp plugin install wp-smushit --activate --allow-root"
       args:
-        chdir: "/var/www/{{ domain }}/html"
-      when: enable_image_optimization | bool
+        chdir: "{{ wp_domain_path }}"
+      register: wp_smush_install_result
+      changed_when: "'already installed' not in wp_smush_install_result.stdout and ('activated' in wp_smush_install_result.stdout or 'Success: Installed and activated' in wp_smush_install_result.stdout)"
+      failed_when: wp_smush_install_result.rc != 0 and 'already installed and active' not in wp_smush_install_result.stdout and 'already installed' not in wp_smush_install_result.stdout
+      tags: ['images', 'wordpress', 'plugin', 'wp-smush']
+      # Note: Further configuration of the Smush plugin is not handled by this task.

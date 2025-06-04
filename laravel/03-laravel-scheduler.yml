@@ -1,13 +1,37 @@
----
 # laravel/03-laravel-scheduler.yml
 - hosts: all
   become: true
+  vars:
+    # Determine if Laravel scheduler is enabled for this domain
+    effective_enable_scheduler: "{{ domain_config.enable_scheduler | default(GLOBAL_LARAVEL_ENABLE_SCHEDULER | default(false)) }}"
+
+    _app_domain: "{{ domain_config.domain }}"
+    _laravel_webroot: "/var/www/{{ _app_domain }}/html"
+    _laravel_scheduler_log_path: "/var/www/{{ _app_domain }}/logs/laravel_scheduler.log" # Suggested specific log file
+
+    # User for the cron job (typically the web server user for Laravel artisan commands)
+    _cron_user: "{{ domain_config.laravel_cron_user | default(GLOBAL_LARAVEL_CRON_USER | default('www-data')) }}"
+
+  # This playbook is specific to Laravel and runs only if the scheduler is enabled.
+  when:
+    - domain_config is defined
+    - domain_config.platform is defined and domain_config.platform == "laravel"
+    - effective_enable_scheduler | bool
+
   tasks:
-    - name: Set up Laravel scheduler cron job
-      cron:
-        name: "Laravel Scheduler for {{ domain_config.domain }}"
+    - name: "Set up Laravel scheduler cron job for domain: {{ _app_domain }}"
+      ansible.builtin.cron:
+        name: "Laravel Scheduler for {{ _app_domain }}"
         minute: "*"
-        job: "cd /var/www/{{ domain_config.domain }}/html && php artisan schedule:run >> /dev/null 2>&1"
-        user: www-data
+        hour: "*"
+        day: "*"
+        month: "*"
+        weekday: "*"
+        user: "{{ _cron_user }}"
+        # The job changes directory to the Laravel root, then runs the scheduler.
+        # Output is redirected. Consider logging to a file instead of /dev/null for easier debugging.
+        # Example for logging: "cd {{ _laravel_webroot }} && php artisan schedule:run >> {{ _laravel_scheduler_log_path }} 2>&1"
+        job: "cd {{ _laravel_webroot | quote }} && php artisan schedule:run >> /dev/null 2>&1"
         state: present
-      when: domain_config.enable_scheduler | default(false) | bool
+        cron_file: "ansible_laravel_scheduler_{{ _app_domain | replace('.', '_') }}" # Creates a separate cron file under /etc/cron.d/
+      tags: ['laravel', 'scheduler', 'cron']

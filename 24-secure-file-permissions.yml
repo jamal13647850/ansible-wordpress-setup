@@ -1,46 +1,81 @@
----
+# 24-secure-file-permissions.yml
 - hosts: all
   become: true
+  vars:
+    # Determine if securing file permissions is enabled for this run
+    effective_secure_file_permissions: "{{ domain_config.secure_file_permissions | default(GLOBAL_SECURE_FILE_PERMISSIONS_POLICY | default(true)) }}"
+
+    _app_domain: "{{ domain_config.domain }}"
+    _app_webroot: "/var/www/{{ _app_domain }}/html"
+    _wp_config_path: "{{ _app_webroot }}/wp-config.php"
+    _wp_uploads_path: "{{ _app_webroot }}/wp-content/uploads"
+
+    # Define web server user and group, falling back to globals or common defaults
+    _web_user: "{{ domain_config.linux_username | default(GLOBAL_LINUX_USERNAME | default('www-data')) }}" # Assuming this var from domain_config is the web user
+    _web_group: "{{ domain_config.linux_group | default(GLOBAL_LINUX_GROUP | default('www-data')) }}"   # Assuming this var from domain_config is the web group
+
+  # This entire playbook should only run if secure_file_permissions is enabled and domain_config is defined.
+  when:
+    - domain_config is defined
+    - domain_config.domain is defined
+    - effective_secure_file_permissions | bool
+
   tasks:
-    - name: Ensure WordPress directory exists
-      file:
-        path: "/var/www/{{ item.key }}/html"
+    - name: "Ensure webroot directory exists for {{ _app_domain }} before setting permissions"
+      ansible.builtin.file:
+        path: "{{ _app_webroot }}"
         state: directory
-        owner: www-data
-        group: www-data
-        mode: '0755'
-      with_dict: "{{ domains }}"
-      when: secure_file_permissions | default(true) | bool
+        owner: "{{ _web_user }}"
+        group: "{{ _web_group }}"
+        mode: '0755' # Standard base permission for webroot parent
+      tags: ['permissions', 'filesystem', 'setup']
 
-    - name: Set secure permissions for WordPress files
-      shell: |
-        find /var/www/{{ item.key }}/html -type d -exec chmod 755 {} \;
-        find /var/www/{{ item.key }}/html -type f -exec chmod 644 {} \;
-        chmod 600 /var/www/{{ item.key }}/html/wp-config.php
-      with_dict: "{{ domains }}"
-      when: secure_file_permissions | default(true) | bool
+    - name: "Set general secure permissions for files and directories in {{ _app_webroot }}"
+      ansible.builtin.shell: |
+        find {{ _app_webroot | quote }} -type d -exec chmod 755 {} \;
+        find {{ _app_webroot | quote }} -type f -exec chmod 644 {} \;
+      changed_when: false # Shell commands for chmod can be noisy; assume idempotency or check more granularly if needed
+      tags: ['permissions', 'filesystem', 'hardening']
+      # Note: This sets general permissions. Specific files like wp-config.php will be handled next.
 
-    - name: Set proper ownership for WordPress files
-      shell: |
-        chown -R www-data:www-data /var/www/{{ item.key }}/html
-      with_dict: "{{ domains }}"
-      when: secure_file_permissions | default(true) | bool
+    - name: "Set secure permissions for wp-config.php for WordPress site {{ _app_domain }}"
+      ansible.builtin.file:
+        path: "{{ _wp_config_path }}"
+        mode: '0600' # More restrictive permissions
+        owner: "{{ _web_user }}"
+        group: "{{ _web_group }}"
+      when: domain_config.platform == "wordpress" and ansible_check_mode == false # Check mode can't know if file exists yet if created by earlier play
+      tags: ['permissions', 'wordpress', 'hardening', 'wp-config']
+      # If wp-config.php might not exist yet (e.g. if this playbook runs before WP install),
+      # this task might show "changed" even if file doesn't exist to change. Add `ignore_errors: yes` or check existence.
+      # However, this playbook is usually run post-installation.
 
-    - name: Secure uploads directory
-      file:
-        path: "/var/www/{{ item.key }}/html/wp-content/uploads"
-        state: directory
-        owner: www-data
-        group: www-data
-        mode: '0755'
+    - name: "Set proper ownership for all files and directories in {{ _app_webroot }}"
+      ansible.builtin.file:
+        path: "{{ _app_webroot }}"
+        owner: "{{ _web_user }}"
+        group: "{{ _web_group }}"
         recurse: yes
-      with_dict: "{{ domains }}"
-      when: secure_file_permissions | default(true) | bool
+      tags: ['permissions', 'filesystem', 'ownership']
 
-    - name: Disable direct file editing in WordPress
-      lineinfile:
-        path: "/var/www/{{ item.key }}/html/wp-config.php"
+    - name: "Secure uploads directory permissions for WordPress site {{ _app_domain }}"
+      ansible.builtin.file:
+        path: "{{ _wp_uploads_path }}"
+        state: directory # Ensures it exists
+        owner: "{{ _web_user }}"
+        group: "{{ _web_group }}"
+        mode: '0755' # Standard for uploads, allowing web server to write if needed by plugins indirectly
+        recurse: yes # Apply to subdirectories and files within uploads as well
+      when: domain_config.platform == "wordpress"
+      tags: ['permissions', 'wordpress', 'hardening', 'uploads']
+
+    - name: "Disable direct file editing in wp-config.php for WordPress site {{ _app_domain }}"
+      ansible.builtin.lineinfile:
+        path: "{{ _wp_config_path }}"
         line: "define('DISALLOW_FILE_EDIT', true);"
-        insertbefore: "/* That's all, stop editing! Happy publishing. */"
-      with_dict: "{{ domains }}"
-      when: secure_file_permissions | default(true) | bool
+        regexp: "^\\s*define\\s*\\(\\s*'DISALLOW_FILE_EDIT'\\s*," # Matches existing definition to avoid duplicates
+        insertbefore: "^\\/\\*\\s*That's all, stop editing! Happy publishing\\.\\s*\\*\\/"
+        state: present
+        create: false # Should not create wp-config.php, it must exist
+      when: domain_config.platform == "wordpress"
+      tags: ['permissions', 'wordpress', 'hardening', 'wp-config']

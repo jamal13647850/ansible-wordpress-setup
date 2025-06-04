@@ -1,23 +1,69 @@
----
 # laravel/04-laravel-queue.yml
 - hosts: all
   become: true
+  vars:
+    # Determine if Laravel queue worker is enabled for this domain
+    effective_enable_queue: "{{ domain_config.enable_queue | default(GLOBAL_LARAVEL_ENABLE_QUEUE | default(false)) }}"
+
+    _app_domain: "{{ domain_config.domain }}"
+    # Create a systemd-friendly service name slug from the domain name
+    _app_domain_slug: "{{ _app_domain | replace('.', '-') | replace('_', '-') }}"
+    _laravel_worker_service_name: "laravel-worker-{{ _app_domain_slug }}.service"
+
+    # Variables used by the template laravel-worker.service.j2:
+    # domain_config.domain (used for description and paths)
+    # domain_config.php_executable (implicitly /usr/bin/php in template, can be made var)
+    # domain_config.laravel_webroot (implicitly /var/www/{{domain_config.domain}}/html in template)
+    # domain_config.queue_driver (used with a default in template)
+    # Hardcoded in template: --sleep, --tries, --max-time, User, Group, RestartSec
+    # These could be exposed as domain_config vars if more control is needed.
+
+  # This playbook is specific to Laravel and runs only if queue processing is enabled.
+  when:
+    - domain_config is defined
+    - domain_config.platform is defined and domain_config.platform == "laravel"
+    - effective_enable_queue | bool
+
   tasks:
-    - name: Create Laravel queue worker systemd service
-      template:
+    - name: "Create systemd service file for Laravel queue worker: {{ _laravel_worker_service_name }}"
+      ansible.builtin.template:
         src: templates/laravel-worker.service.j2
-        dest: "/etc/systemd/system/laravel-worker-{{ domain_config.domain | replace('.', '-') }}.service"
+        dest: "/etc/systemd/system/{{ _laravel_worker_service_name }}"
+        owner: root
+        group: root
         mode: '0644'
-      when: domain_config.enable_queue | default(false) | bool
-    
-    - name: Reload systemd
-      systemd:
+      notify: Reload systemd and restart queue worker
+      tags: ['laravel', 'queue', 'systemd', 'config']
+
+    - name: Ensure systemd is reloaded to recognize new/changed service files
+      ansible.builtin.systemd:
         daemon_reload: yes
-      when: domain_config.enable_queue | default(false) | bool
-    
-    - name: Enable and start Laravel queue worker
-      systemd:
-        name: "laravel-worker-{{ domain_config.domain | replace('.', '-') }}"
+      # This task is only explicitly needed if the template task changed.
+      # However, it's often run to be safe if multiple services might be defined/changed.
+      # For fine-grained control, a handler is better.
+      # For simplicity of this playbook, if it runs, we assume a reload might be needed.
+      tags: ['laravel', 'queue', 'systemd']
+      listen: "Reload systemd and restart queue worker" # Will be triggered by template change
+
+    - name: "Enable and start Laravel queue worker service: {{ _laravel_worker_service_name }}"
+      ansible.builtin.systemd:
+        name: "{{ _laravel_worker_service_name }}"
         state: started
-        enabled: yes
-      when: domain_config.enable_queue | default(false) | bool
+        enabled: yes # Ensure it starts on boot
+      tags: ['laravel', 'queue', 'systemd', 'service']
+
+  handlers:
+    - name: Reload systemd and restart queue worker
+      ansible.builtin.systemd:
+        daemon_reload: yes
+      # After daemon_reload, the service needs to be restarted to pick up changes IF the service file was changed.
+      # If only daemon_reload is needed, then a separate handler for restart.
+      # Let's make it simple: reload and then ensure it's restarted.
+      notify: "Actually restart queue worker for {{ _app_domain_slug }}"
+      listen: "Reload systemd and restart queue worker"
+
+    - name: "Actually restart queue worker for {{ _app_domain_slug }}" # Separate handler to ensure restart after reload
+      ansible.builtin.systemd:
+        name: "{{ _laravel_worker_service_name }}"
+        state: restarted
+      listen: "Actually restart queue worker for {{ _app_domain_slug }}"

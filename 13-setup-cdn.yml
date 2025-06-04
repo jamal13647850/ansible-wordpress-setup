@@ -1,18 +1,79 @@
+# 13-setup-cdn.yml
 - hosts: all
   become: true
+  vars:
+    # --- Effective variables for this playbook run ---
+    effective_enable_cdn: "{{ domain_config.enable_cdn | default(GLOBAL_ENABLE_CDN | default(false)) }}"
+    effective_enable_local_cdn: "{{ domain_config.enable_local_cdn | default(GLOBAL_ENABLE_LOCAL_CDN | default(false)) }}"
+
+    # Determine if any CDN is enabled for the play's main condition
+    is_any_cdn_enabled: "{{ effective_enable_cdn | bool or effective_enable_local_cdn | bool }}"
+
+    # WordPress domain specific path
+    wp_domain_path: "/var/www/{{ domain_config.domain }}/html"
+
+    # CDN Enabler URL - this is the URL that will replace your site's static asset URLs.
+    # It should point to where your CDN serves files from (e.g., cdn.yourdomain.com, or a provider-specific URL).
+    # generate_config.sh doesn't ask for this; it might need to be a global or a more intelligently derived per-domain var.
+    # Using a common pattern as a default.
+    effective_cdn_enabler_url: "{{ domain_config.cdn_enabler_url | default(GLOBAL_CDN_ENABLER_URL_PATTERN | default('https://cdn.' + domain_config.domain)) }}"
+
+    # General CDN provider details (e.g., Cloudflare)
+    effective_cdn_provider: "{{ domain_config.cdn_provider | default(GLOBAL_CDN_PROVIDER | default('cloudflare')) }}"
+    # effective_cdn_api_key: "{{ domain_config.cdn_api_key | default(GLOBAL_CDN_API_KEY | default('')) }}" # Sensitive, use Vault
+    # effective_cdn_account: "{{ domain_config.cdn_account | default(GLOBAL_CDN_ACCOUNT | default('')) }}" # Sensitive
+
+    # Local/Specific CDN provider details (e.g., ArvanCloud)
+    effective_local_cdn_provider: "{{ domain_config.local_cdn_provider | default(GLOBAL_LOCAL_CDN_PROVIDER | default('arvancloud')) }}"
+    # effective_local_cdn_api_key: "{{ domain_config.local_cdn_api_key | default(GLOBAL_LOCAL_CDN_API_KEY | default('')) }}" # Sensitive, use Vault
+
+  # This playbook is primarily for WordPress (due to CDN Enabler plugin) and runs if any CDN is enabled.
+  when:
+    - domain_config is defined
+    - domain_config.platform is defined and domain_config.platform == "wordpress"
+    - is_any_cdn_enabled | bool
+
   tasks:
-    - name: Install CDN Enabler plugin
-      shell: wp plugin install cdn-enabler --allow-root
+    - name: "Install and activate CDN Enabler plugin on {{ domain_config.domain }}"
+      ansible.builtin.shell:
+        cmd: "wp plugin install cdn-enabler --activate --allow-root"
       args:
-        chdir: "/var/www/{{ domain }}/html"
-      when: enable_cdn | bool or enable_local_cdn | bool
+        chdir: "{{ wp_domain_path }}"
+      register: cdn_enabler_install_result
+      changed_when: "'already installed' not in cdn_enabler_install_result.stdout and ('activated' in cdn_enabler_install_result.stdout or 'Success: Installed and activated' in cdn_enabler_install_result.stdout)"
+      failed_when: cdn_enabler_install_result.rc != 0 and 'already installed and active' not in cdn_enabler_install_result.stdout and 'already installed' not in cdn_enabler_install_result.stdout
+      tags: ['cdn', 'wordpress', 'plugin', 'cdn-enabler']
 
-    - name: Configure Cloudflare CDN (placeholder)
-      debug:
-        msg: "Configure {{ cdn_provider }} with API key {{ cdn_api_key }} and account {{ cdn_account }}"
-      when: enable_cdn | bool and cdn_provider == "cloudflare"
+    - name: "Configure CDN Enabler plugin with CDN URL for {{ domain_config.domain }}"
+      ansible.builtin.shell:
+        # CDN Enabler stores its settings in 'cdn_enabler' option, field 'url'.
+        # Example wp-cli command: wp option patch update cdn_enabler url <your_cdn_url>
+        # Ensuring the URL is not empty.
+        cmd: "wp option patch update cdn_enabler url {{ effective_cdn_enabler_url | quote }} --allow-root"
+      args:
+        chdir: "{{ wp_domain_path }}"
+      when: effective_cdn_enabler_url | length > 0
+      changed_when: true # Assume changed to ensure settings are applied or re-applied
+      tags: ['cdn', 'wordpress', 'plugin', 'cdn-enabler', 'config']
+      # Note: This sets a basic CDN URL. CDN Enabler has other options (included dirs, exclusions, HTTPS)
+      # that could be configured here if needed via more complex `wp option update` commands or patching the whole option.
 
-    - name: Configure ArvanCloud CDN (placeholder)
-      debug:
-        msg: "Configure {{ local_cdn_provider }} with API key {{ local_cdn_api_key }}"
-      when: enable_local_cdn | bool and local_cdn_provider == "arvancloud"
+    - name: "Placeholder: Configure General CDN Provider (e.g., {{ effective_cdn_provider }}) for {{ domain_config.domain }}"
+      ansible.builtin.debug:
+        msg: |
+          CDN Provider: {{ effective_cdn_provider }}
+          This task is a placeholder. Actual configuration for {{ effective_cdn_provider }}
+          (e.g., API interactions, DNS changes, purging cache) would go here or in a separate,
+          more specific playbook/role.
+          CDN URL for plugin: {{ effective_cdn_enabler_url }}
+      when: effective_enable_cdn | bool
+      tags: ['cdn', 'config', 'placeholder']
+
+    - name: "Placeholder: Configure Local/Specific CDN Provider (e.g., {{ effective_local_cdn_provider }}) for {{ domain_config.domain }}"
+      ansible.builtin.debug:
+        msg: |
+          Local CDN Provider: {{ effective_local_cdn_provider }}
+          This task is a placeholder. Actual configuration for {{ effective_local_cdn_provider }} would go here.
+          CDN URL for plugin: {{ effective_cdn_enabler_url }}
+      when: effective_enable_local_cdn | bool and (effective_cdn_provider != effective_local_cdn_provider or not (effective_enable_cdn | bool) )
+      tags: ['cdn', 'config', 'placeholder', 'local_cdn']

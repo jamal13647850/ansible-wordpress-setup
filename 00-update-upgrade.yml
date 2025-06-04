@@ -1,18 +1,26 @@
+# 00-update-upgrade.yml
 - hosts: all
   become: true
+  vars:
+    # Define effective_linux_username based on domain_config, falling back to a global, then a hardcoded default.
+    # This assumes domain_config is passed as an extra-var.
+    # GLOBAL_LINUX_USERNAME would be defined in group_vars/all or a similar global scope eventually.
+    effective_linux_username: "{{ domain_config.linux_username | default(GLOBAL_LINUX_USERNAME | default('ubuntu')) }}"
   tasks:
     - name: Update package lists
-      apt:
+      ansible.builtin.apt:
         update_cache: yes
+      tags: ['system', 'update']
 
-    - name: Upgrade all packages
-      apt:
+    - name: Upgrade all packages to their latest version
+      ansible.builtin.apt:
         name: "*"
         state: latest
       register: apt_upgrade
+      tags: ['system', 'upgrade']
 
-    - name: Install additional tools
-      apt:
+    - name: Install additional useful tools
+      ansible.builtin.apt:
         name:
           - bashtop
           - tmux
@@ -20,23 +28,35 @@
           - curl
           - nano
           - tar
-          - clamav
-          - rkhunter
+          - clamav # For security scans
+          - rkhunter # For rootkit scans
           - rsync
         state: present
-        update_cache: yes
+        update_cache: yes # Run update_cache again just in case it's been a while since the first task
+      tags: ['system', 'tools']
 
-    - name: Add cleancache alias to .bashrc
-      lineinfile:
-        path: "/home/{{ linux_username }}/.bashrc"
-        line: "alias cleancache{{ domain | replace('.', '') }}='rm -rf /etc/nginx/cache/{{ domain }}/*'"
+    - name: "Add Nginx cache clearing alias for domain {{ domain_config.domain }} to {{ effective_linux_username }}'s .bashrc"
+      ansible.builtin.lineinfile:
+        path: "/home/{{ effective_linux_username }}/.bashrc"
+        line: "alias cleancache_{{ domain_config.domain | replace('.', '_') | replace('-', '_') }}='sudo rm -rf /etc/nginx/cache/{{ domain_config.domain }}/* && echo \"Nginx cache for {{ domain_config.domain }} cleared by alias.\"'"
+        regexp: "^alias cleancache_{{ domain_config.domain | replace('.', '_') | replace('-', '_') }}=.*"
         state: present
-        owner: "{{ linux_username }}"
-        group: "{{ linux_username }}"
+        owner: "{{ effective_linux_username }}"
+        group: "{{ effective_linux_username }}" # Assuming group is the same as username for home directory files
         mode: '0644'
-      become: false
+        create: true # Create .bashrc if it doesn't exist
+      become: false # Runs as the connecting user (e.g., 'ubuntu', 'ansible_user')
+      when: domain_config is defined and domain_config.domain is defined
+      tags: ['config', 'nginx_helper']
+      # Note: The user '{{ effective_linux_username }}' will need passwordless sudo for 'rm'
+      # or they will be prompted for a password when using the alias.
+      # Alternatively, this task could be run with become_user: "{{ effective_linux_username }}"
+      # if the connecting user is root or has sudo rights to become that user.
 
-    - name: Reboot server if needed
-      reboot:
-        reboot_timeout: 600
-      when: apt_upgrade.changed
+    - name: Reboot server if kernel/libc updates suggest it (apt_upgrade registered a change)
+      ansible.builtin.reboot:
+        msg: "Rebooting server due to package upgrades."
+        reboot_timeout: 600 # 10 minutes
+        test_command: "whoami" # A simple command to run after reboot to confirm success
+      when: apt_upgrade.changed and (ansible_reboot_pending | default(false)) # Check for reboot pending flag if available from apt
+      tags: ['system', 'reboot']

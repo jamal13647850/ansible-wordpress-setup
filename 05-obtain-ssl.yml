@@ -1,42 +1,101 @@
-- hosts: all  
-  become: true  
+# 05-obtain-ssl.yml
+- hosts: all
+  become: true
+  vars:
+    # These will primarily come from domain_config passed by run_playbooks.sh
+    effective_domain: "{{ domain_config.domain }}"
+    # SSL email can have a global fallback if desired, e.g., a general admin email for Let's Encrypt
+    effective_ssl_email: "{{ domain_config.ssl_email | default(GLOBAL_LETSENCRYPT_DEFAULT_EMAIL | default('')) }}"
 
-  tasks:  
-    - name: Install Certbot  
-      apt:  
-        name: python3-certbot-nginx  
-        state: latest  
-        update_cache: yes  
+    # Option for Let's Encrypt staging/test certificate
+    le_test_cert: "{{ domain_config.letsencrypt_test_cert | default(GLOBAL_LETSENCRYPT_TEST_CERT | default(false)) }}"
+    le_staging_server_option: "{% if le_test_cert | bool %}--test-cert{% else %}{% endif %}"
+    # For Certbot to automatically configure Nginx and redirect HTTP to HTTPS
+    le_redirect_option: "--redirect" # Can be made conditional: domain_config.letsencrypt_force_redirect | default(true)
+    le_nginx_plugin_option: "--nginx"
 
-    - name: Check if domain resolves to server IP
-      shell: "host {{ domain }} | grep $(curl -s ifconfig.me)"
-      register: domain_resolves
-      ignore_errors: yes
-      changed_when: false
+  # This entire playbook should only run if an SSL email is provided for the domain, indicating SSL is desired.
+  when: domain_config is defined and domain_config.domain is defined and effective_ssl_email | length > 0
 
-    - name: Check if SSL certificate exists  
-      stat:  
-        path: "/etc/letsencrypt/live/{{ domain }}/fullchain.pem"  
-      register: ssl_cert  
+  tasks:
+    - name: Install Certbot and its Nginx plugin
+      ansible.builtin.apt:
+        name: python3-certbot-nginx
+        state: latest
+        update_cache: yes
+      tags: ['ssl', 'certbot', 'prerequisites', 'system']
 
-    - name: Obtain SSL certificate with Certbot  
-      command: certbot --nginx -d {{ domain }} -d www.{{ domain }} --email {{ ssl_email }} --agree-tos --redirect --non-interactive  
-      when: 
-        - not ssl_cert.stat.exists
-        - domain_resolves.rc == 0
-      notify: Restart Nginx  
+    - name: "Check if domain '{{ effective_domain }}' resolves to this server's public IP"
+      ansible.builtin.shell:
+        # This command attempts to resolve the domain and check if any of its IPs match the server's public IP.
+        # Note: `curl -s ifconfig.me` or `curl -s ipinfo.io/ip` are external dependencies.
+        # A more robust internal way might involve facts if public IP is known as a fact.
+        cmd: "SERVER_IP=$(curl -s --connect-timeout 5 ifconfig.me || curl -s --connect-timeout 5 ipinfo.io/ip); if [ -z \"$SERVER_IP\" ]; then echo 'Failed to get server IP' >&2; exit 1; fi; host {{ effective_domain }} | grep -q \"$SERVER_IP\""
+      register: domain_resolves_to_server_ip
+      ignore_errors: true # We handle the result in the warning task and certbot task condition
+      changed_when: false # This task doesn't change state
+      tags: ['ssl', 'dns_check']
+
+    - name: "Set fact for DNS resolution status for {{ effective_domain }}"
+      ansible.builtin.set_fact:
+        dns_ok_for_ssl: "{{ domain_resolves_to_server_ip.rc == 0 }}"
+      tags: ['ssl', 'dns_check']
+
+    - name: "Display DNS resolution check result for {{ effective_domain }}"
+      ansible.builtin.debug:
+        msg: "DNS resolution for {{ effective_domain }} to this server's IP: {{ 'OK' if dns_ok_for_ssl else 'FAILED or NOT CHECKED (server IP could not be fetched)' }}. Output: {{ domain_resolves_to_server_ip.stdout | default('') }} {{ domain_resolves_to_server_ip.stderr | default('') }}"
+      tags: ['ssl', 'dns_check']
+
+    - name: "Check if SSL certificate already exists for {{ effective_domain }}"
+      ansible.builtin.stat:
+        path: "/etc/letsencrypt/live/{{ effective_domain }}/fullchain.pem"
+      register: ssl_cert_stat
+      tags: ['ssl', 'cert_check']
+
+    - name: "Obtain SSL certificate with Certbot for {{ effective_domain }} (and www subdomain)"
+      ansible.builtin.command:
+        cmd: "certbot {{ le_nginx_plugin_option }} -d {{ effective_domain }} -d www.{{ effective_domain }} --email {{ effective_ssl_email }} --agree-tos {{ le_redirect_option }} --non-interactive {{ le_staging_server_option | trim }}"
+      when:
+        - not ssl_cert_stat.stat.exists # Only if certificate doesn't exist
+        - dns_ok_for_ssl | bool         # Only if DNS resolution check passed
+      notify: Restart Nginx service
       register: certbot_result
-      failed_when: 
+      # Handle specific Certbot errors gracefully (e.g., rate limits)
+      failed_when:
         - certbot_result.rc != 0
-        - "'too many certificates already issued for exact set of domains' not in certbot_result.stderr"
+        - "'too many certificates already issued' not in certbot_result.stderr and 'rateLimited' not in certbot_result.stderr"
+        - "'Unable to find a virtual host' not in certbot_result.stderr" # Common if Nginx isn't fully configured yet for the domain
+      changed_when: certbot_result.rc == 0 and ("Successfully received certificate" in certbot_result.stdout or "Certificate not yet due for renewal" in certbot_result.stdout)
+      tags: ['ssl', 'certbot', 'obtain_cert']
 
-    - name: Warning if domain does not resolve to server IP
-      debug:
-        msg: "WARNING: The domain {{ domain }} does not resolve to this server's IP. SSL certificate could not be obtained."
-      when: domain_resolves.rc != 0
+    - name: "Display Certbot command result for {{ effective_domain }}"
+      ansible.builtin.debug:
+        var: certbot_result
+        verbosity: 1 # Show only if verbosity is 1 or more
+      when: certbot_result is defined
+      tags: ['ssl', 'certbot', 'debug']
 
-  handlers:  
-    - name: Restart Nginx  
-      service:  
-        name: nginx  
+    - name: "Warning if domain '{{ effective_domain }}' DNS did not resolve correctly for SSL"
+      ansible.builtin.debug:
+        msg: "WARNING: The domain '{{ effective_domain }}' (or www) did not resolve to this server's IP or server IP could not be fetched. SSL certificate could not be automatically obtained by Certbot. Please check DNS records."
+      when:
+        - not ssl_cert_stat.stat.exists # Only show warning if cert doesn't exist
+        - not (dns_ok_for_ssl | bool)   # And DNS check failed
+      tags: ['ssl', 'dns_check', 'warning']
+
+    - name: "Warning if Certbot failed for {{ effective_domain }} for other reasons"
+      ansible.builtin.debug:
+        msg: "WARNING: Certbot failed to obtain SSL certificate for '{{ effective_domain }}'. Review logs. Certbot stderr: {{ certbot_result.stderr | default('N/A') }}"
+      when:
+        - certbot_result is defined
+        - certbot_result.rc != 0
+        - not ("Successfully received certificate" in certbot_result.stdout or "Certificate not yet due for renewal" in certbot_result.stdout) # Not a success
+        - not ('too many certificates already issued' in certbot_result.stderr or 'rateLimited' in certbot_result.stderr or 'Unable to find a virtual host' in certbot_result.stderr) # Not one of the gracefully handled errors
+      tags: ['ssl', 'certbot', 'warning']
+
+  handlers:
+    - name: Restart Nginx service
+      ansible.builtin.systemd:
+        name: nginx
         state: restarted
+      listen: "Restart Nginx service"

@@ -1,15 +1,53 @@
+# 17-advanced-caching.yml
 - hosts: all
   become: true
+  vars:
+    # Determine if advanced caching is enabled for this run
+    effective_enable_advanced_caching: "{{ domain_config.enable_advanced_caching | default(GLOBAL_ENABLE_ADVANCED_CACHING | default(false)) }}"
+
+    # Determine the cache type (currently this playbook primarily supports 'memcached')
+    effective_cache_type: "{{ domain_config.cache_type | default(GLOBAL_ADVANCED_CACHE_TYPE | default('memcached')) }}"
+
+    # WordPress domain specific path (used if platform is WordPress)
+    wp_domain_path: "/var/www/{{ domain_config.domain }}/html"
+    wp_config_file_path: "{{ wp_domain_path }}/wp-config.php"
+
+  # This entire playbook should only run if advanced caching is enabled.
+  when: effective_enable_advanced_caching | bool
+
   tasks:
-    - name: Install Memcached
-      apt:
+    - name: "Install Memcached service (if cache type is 'memcached')"
+      ansible.builtin.apt:
         name: memcached
         state: present
-      when: enable_advanced_caching | bool and cache_type == "memcached"
+        update_cache: yes
+      when: effective_cache_type == "memcached"
+      tags: ['caching', 'memcached', 'system', 'install']
+      # Note: This installs the Memcached service. The PHP extension (e.g., php-memcached)
+      # needs to be installed separately, ideally in 03-install-php-composer-wpcli.yml,
+      # conditional on this cache type being selected for the specific PHP version.
 
-    - name: Configure Memcached in wp-config.php
-      lineinfile:
-        path: "/var/www/{{ domain }}/html/wp-config.php"
-        insertbefore: "/* That's all, stop editing! Happy publishing. */"
+    - name: Ensure Memcached service is started and enabled
+      ansible.builtin.systemd:
+        name: memcached
+        state: started
+        enabled: yes
+      when: effective_cache_type == "memcached"
+      tags: ['caching', 'memcached', 'service']
+
+    - name: "Configure WP_CACHE constant in wp-config.php for {{ domain_config.domain }} (if platform is WordPress and cache is memcached)"
+      ansible.builtin.lineinfile:
+        path: "{{ wp_config_file_path }}"
+        regexp: "^{{ '\\s*' }}define\\(\\s*'WP_CACHE'\\s*,.*\\);" # Matches existing WP_CACHE definition
         line: "define('WP_CACHE', true);"
-      when: enable_advanced_caching | bool and cache_type == "memcached"
+        insertbefore: "^\\/\\*\\s*That's all, stop editing! Happy publishing\\.\\s*\\*\\/" # Standard WordPress comment
+        state: present
+        create: false # Do not create wp-config.php if it doesn't exist
+      when:
+        - domain_config.platform == "wordpress"
+        - effective_cache_type == "memcached" # Only if memcached is the chosen type
+      tags: ['caching', 'wordpress', 'wp-config', 'memcached', 'domain_specific']
+      # CRITICAL NOTE: For WordPress to use Memcached with WP_CACHE true,
+      # a 'wp-content/object-cache.php' drop-in specific to Memcached must be present.
+      # This playbook does NOT install that drop-in. It's often provided by caching plugins
+      # or can be a standalone file. Also, the phpX.X-memcached extension must be installed.

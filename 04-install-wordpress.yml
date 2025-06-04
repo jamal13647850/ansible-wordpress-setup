@@ -1,66 +1,104 @@
----
+# 04-install-wordpress.yml
 - hosts: all
   become: true
-  tasks:
-    - name: Ensure required variables are defined
-      fail:
-        msg: "Required variable '{{ item }}' is not defined."
-      when: domain_config[item] is not defined
-      loop:
-        - domain
-        - wordpress_admin_user
-        - wordpress_admin_password
-        - wordpress_admin_email
-        - wordpress_title
-        - wordpress_db_prefix
-        - mysql_db_name
+  # This entire playbook should only run if the platform for the current domain is WordPress.
+  # This check is primarily for safety if the playbook is ever run directly.
+  # run_playbooks.sh already ensures this by selecting playbooks based on platform.
+  when: domain_config is defined and domain_config.platform is defined and domain_config.platform == "wordpress"
+  vars:
+    # Define effective variables for this playbook run, using domain_config with fallbacks
+    wp_domain: "{{ domain_config.domain }}"
+    wp_path: "/var/www/{{ wp_domain }}/html" # Base path for WordPress installation
 
-    - name: Create WordPress directory
-      file:
-        path: "/var/www/{{ domain_config.domain }}/html"
+    # WordPress Core Installation Details
+    wp_admin_user: "{{ domain_config.wordpress_admin_user }}"
+    wp_admin_password: "{{ domain_config.wordpress_admin_password }}"
+    wp_admin_email: "{{ domain_config.wordpress_admin_email }}"
+    wp_title: "{{ domain_config.wordpress_title }}"
+    wp_locale: "{{ domain_config.wordpress_locale | default(GLOBAL_WP_DEFAULT_LOCALE | default('en_US')) }}"
+
+    # Database details for wp-config.php (these are set in domain_config by generate_config.sh)
+    # These are also used by 01-install-mysql.yml to create the DB and user.
+    # For wp-config.php, we just need to ensure they are passed to the template.
+    # The template itself will reference domain_config variables directly for these.
+
+    # Required variables for the initial check task
+    required_wp_vars:
+      - domain
+      - wordpress_admin_user
+      - wordpress_admin_password
+      - wordpress_admin_email
+      - wordpress_title
+      - wordpress_db_prefix # Used in wp-config.php.j2
+      - mysql_db_name       # Used in wp-config.php.j2
+      # mysql_db_user and mysql_db_password are also needed by wp-config.php.j2
+
+  tasks:
+    - name: "Ensure required WordPress variables are defined for domain: {{ wp_domain }}"
+      ansible.builtin.fail:
+        msg: "Required variable 'domain_config.{{ item }}' is not defined for WordPress setup of {{ wp_domain }}."
+      when: domain_config[item] is not defined or (domain_config[item] is string and domain_config[item] | length == 0)
+      loop: "{{ required_wp_vars }}"
+      tags: ['wordpress', 'prerequisites', 'validation']
+
+    - name: "Create WordPress root directory: {{ wp_path }}"
+      ansible.builtin.file:
+        path: "{{ wp_path }}"
         state: directory
         owner: www-data
         group: www-data
         mode: '0755'
+      tags: ['wordpress', 'filesystem']
 
-    - name: Download WordPress
-      shell: wp core download --locale={{ domain_config.wordpress_locale | default('en_US') }} --allow-root
+    - name: "Download WordPress core to {{ wp_path }}"
+      ansible.builtin.shell:
+        cmd: "wp core download --locale={{ wp_locale }} --allow-root --path={{ wp_path | quote }}"
       args:
-        chdir: "/var/www/{{ domain_config.domain }}/html"
-        creates: "/var/www/{{ domain_config.domain }}/html/wp-config.php"
+        # Check for a more reliable indicator of core files, like wp-includes/version.php
+        creates: "{{ wp_path }}/wp-includes/version.php"
+      changed_when: false # Idempotency handled by 'creates' and wp core verify-checksums (if used)
+      tags: ['wordpress', 'core', 'download']
 
-    - name: Copy wp-config.php template
-      template:
-        src: wp-config.php.j2
-        dest: "/var/www/{{ domain_config.domain }}/html/wp-config.php"
+    - name: "Copy wp-config.php template for {{ wp_domain }}"
+      ansible.builtin.template:
+        src: templates/wp-config.php.j2 # This template will use domain_config.* variables
+        dest: "{{ wp_path }}/wp-config.php"
         owner: www-data
         group: www-data
-        mode: '0644'
+        mode: '0600' # Secure permissions for wp-config.php
+      tags: ['wordpress', 'core', 'config']
 
-    - name: Install WordPress core
-      shell: |
-        wp core install \
-          --url="https://{{ domain_config.domain }}" \
-          --title="{{ domain_config.wordpress_title }}" \
-          --admin_user="{{ domain_config.wordpress_admin_user }}" \
-          --admin_password="{{ domain_config.wordpress_admin_password }}" \
-          --admin_email="{{ domain_config.wordpress_admin_email }}" \
-          --locale="{{ domain_config.wordpress_locale | default('en_US') }}" \
-          --allow-root
-      args:
-        chdir: "/var/www/{{ domain_config.domain }}/html"
-      register: wp_install
-      failed_when: wp_install.rc != 0 and "WordPress is already installed" not in wp_install.stderr
+    - name: "Install WordPress core for {{ wp_domain }}"
+      ansible.builtin.shell:
+        cmd: |
+          wp core install \
+            --url="https://{{ wp_domain }}" \
+            --title="{{ wp_title | quote }}" \
+            --admin_user="{{ wp_admin_user | quote }}" \
+            --admin_password={{ wp_admin_password | quote }} \
+            --admin_email={{ wp_admin_email | quote }} \
+            --locale={{ wp_locale | quote }} \
+            --skip-email \
+            --allow-root --path={{ wp_path | quote }}
+      register: wp_install_result
+      # Check for success or if WordPress is already installed
+      failed_when: wp_install_result.rc != 0 and "already installed" not in wp_install_result.stderr and "already installed" not in wp_install_result.stdout
+      changed_when: "'Success: WordPress installed successfully.' in wp_install_result.stdout" # Be more specific on change
+      tags: ['wordpress', 'core', 'install']
+      # Note: Consider if --skip-email is always desired.
 
-    - name: Ensure WordPress ownership
-      file:
-        path: "/var/www/{{ domain_config.domain }}/html"
+    - name: "Ensure correct ownership for WordPress files at {{ wp_path }}"
+      ansible.builtin.file:
+        path: "{{ wp_path }}"
         owner: www-data
         group: www-data
         recurse: yes
+        # Mode changes for files/dirs should be handled by a dedicated "secure permissions" playbook if needed (e.g., 24-secure-file-permissions.yml)
+      tags: ['wordpress', 'filesystem', 'permissions']
 
   handlers:
     - name: Restart Nginx
-      service:
+      ansible.builtin.systemd: # Using systemd as it's more common now
         name: nginx
         state: restarted
+      listen: "Restart Nginx"

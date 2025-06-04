@@ -1,14 +1,80 @@
+# 08-configure-smtp.yml
 - hosts: all
   become: true
-  tasks:
-    - name: Install WP Mail SMTP plugin
-      shell: wp plugin install wp-mail-smtp --allow-root
-      args:
-        chdir: "/var/www/{{ domain }}/html"
-      when: enable_smtp | bool
+  vars:
+    # --- Effective variables for this playbook run ---
+    effective_enable_smtp: "{{ domain_config.enable_smtp | default(GLOBAL_ENABLE_SMTP_MASTER_SWITCH | default(false)) }}"
+    
+    wp_domain_path: "/var/www/{{ domain_config.domain }}/html"
 
-    - name: Configure WP Mail SMTP
-      shell: wp option update wpmailsmtp '{"mail":{"from_email":"{{ wordpress_admin_email }}","from_name":"{{ wordpress_title }}","mailer":"smtp","smtp":{"host":"{{ smtp_host }}","port":"{{ smtp_port }}","username":"{{ smtp_username }}","password":"{{ smtp_password }}","encryption":"tls","auth":true}}' --format=json --allow-root
+    # WordPress specific settings for "From" fields
+    # Fallback to generic values if specific WordPress ones are not set in domain_config
+    smtp_from_email: "{{ domain_config.wordpress_admin_email | default('wordpress@' + domain_config.domain) }}"
+    smtp_from_name: "{{ domain_config.wordpress_title | default(domain_config.domain) }}"
+    
+    # SMTP Server Details from domain_config or globals
+    # GLOBAL_SMTP_*_DEFAULT would be sensible defaults if no specific global is set.
+    effective_smtp_host: "{{ domain_config.smtp_host | default(GLOBAL_SMTP_HOST | default('localhost')) }}"
+    effective_smtp_port: "{{ domain_config.smtp_port | default(GLOBAL_SMTP_PORT | default(587)) }}" # 587 is common for TLS
+    effective_smtp_encryption: "{{ domain_config.smtp_encryption | default(GLOBAL_SMTP_ENCRYPTION | default('tls')) }}" # 'none', 'tls', 'ssl'
+    
+    _smtp_user_candidate: "{{ domain_config.smtp_username | default(GLOBAL_SMTP_USERNAME | default('')) }}"
+    _smtp_pass_candidate: "{{ domain_config.smtp_password | default(GLOBAL_SMTP_PASSWORD | default('')) }}"
+    
+    # Determine if SMTP authentication should be enabled based on presence of username/password
+    effective_smtp_auth_enabled: "{{ (_smtp_user_candidate | length > 0) and (_smtp_pass_candidate | length > 0) }}"
+    
+    effective_smtp_username: "{{ _smtp_user_candidate }}"
+    effective_smtp_password: "{{ _smtp_pass_candidate }}" # Sensitive
+
+    # Construct the JSON string for WP Mail SMTP options
+    # The plugin expects boolean true/false for boolean JSON fields. Jinja's |lower filter helps.
+    wp_mail_smtp_options_json: >-
+      {
+        "mail": {
+          "from_email": "{{ smtp_from_email }}",
+          "from_name": "{{ smtp_from_name }}",
+          "mailer": "smtp",
+          "return_path": false
+        },
+        "smtp": {
+          "host": "{{ effective_smtp_host }}",
+          "port": "{{ effective_smtp_port }}",
+          "encryption": "{{ effective_smtp_encryption }}",
+          "autotls": true, {# Usually true if encryption is tls, plugin might handle this logic #}
+          "auth": {{ effective_smtp_auth_enabled | lower }},
+          "user": "{{ effective_smtp_username }}",
+          "pass": "{{ effective_smtp_password }}"
+        }
+      }
+
+  # This playbook is for WordPress and only runs if SMTP is enabled for the domain (or globally)
+  when:
+    - domain_config is defined
+    - domain_config.platform is defined and domain_config.platform == "wordpress"
+    - effective_enable_smtp | bool
+
+  tasks:
+    - name: "Install and activate WP Mail SMTP plugin for {{ domain_config.domain }}"
+      ansible.builtin.shell:
+        cmd: "wp plugin install wp-mail-smtp --activate --allow-root"
       args:
-        chdir: "/var/www/{{ domain }}/html"
-      when: enable_smtp | bool
+        chdir: "{{ wp_domain_path }}"
+      register: wp_mail_smtp_install_result
+      changed_when: "'already installed' not in wp_mail_smtp_install_result.stdout and 'activated' in wp_mail_smtp_install_result.stdout"
+      failed_when: wp_mail_smtp_install_result.rc != 0 and 'already installed' not in wp_mail_smtp_install_result.stdout
+      tags: ['smtp', 'wordpress', 'plugin']
+
+    - name: "Configure WP Mail SMTP settings for {{ domain_config.domain }}"
+      ansible.builtin.shell:
+        # Ensure the JSON string is properly quoted for the shell command
+        cmd: "wp option update wpmailsmtp {{ wp_mail_smtp_options_json | to_json | quote }} --format=json --allow-root"
+      args:
+        chdir: "{{ wp_domain_path }}"
+      no_log: true # Prevent logging of sensitive SMTP credentials
+      changed_when: true # `wp option update` doesn't reliably indicate change, assume changed to ensure settings.
+                         # Or, register result and parse for "Success: Value updated."
+      tags: ['smtp', 'wordpress', 'config']
+      # Note: `wp option update` will create the option if it doesn't exist or update it.
+      # Its idempotency regarding "no change" is good, but `changed_when` is set to true
+      # to ensure handlers or subsequent logic consider this step as potentially making a change.

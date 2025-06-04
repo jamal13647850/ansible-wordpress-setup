@@ -1,54 +1,73 @@
-# site.yml
-# WordPress Playbooks
-- name: Import WordPress update-upgrade playbook
-  import_playbook: 00-update-upgrade.yml
-  when: platform == "wordpress"
+# site.yml - Modified to use domain_config.platform
+# This playbook expects 'domain_config' to be passed as an extra variable,
+# containing the configuration for a single target domain, including 'domain_config.platform'.
 
-- name: Import WordPress MySQL playbook
-  import_playbook: 01-install-mysql.yml
-  when: platform == "wordpress"
+# Ensure domain_config and domain_config.platform are defined before proceeding
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: Check if domain_config is defined
+      ansible.builtin.fail:
+        msg: |
+          The 'domain_config' variable is not defined.
+          Please pass it using --extra-vars when running this playbook.
+          Example: ansible-playbook site.yml -i inventory --extra-vars '{ "domain_config": { "domain": "example.com", "platform": "wordpress", ... } }'
+      when: domain_config is not defined or domain_config.platform is not defined
 
-- name: Import WordPress Nginx playbook
-  import_playbook: 02-install-nginx.yml
-  when: platform == "wordpress"
+# Common Playbooks for initial server setup (these will use domain_config internally)
+# These are fundamental and usually run once per server setup, but are included here
+# assuming this site.yml might be used to set up a new domain on an already prepped server.
+# The playbooks themselves must correctly use domain_config and global fallbacks.
 
-- name: Import WordPress PHP/Composer/WP-CLI playbook
-  import_playbook: 03-install-php-composer-wpcli.yml
-  when: platform == "wordpress"
+- name: Import common server prerequisites (Update, MySQL, Nginx, PHP)
+  ansible.builtin.import_playbook: 00-update-upgrade.yml
+  when: domain_config is defined and domain_config.platform is defined
 
-- name: Import WordPress installation playbook
-  import_playbook: 04-install-wordpress.yml
-  when: platform == "wordpress"
+- name: Import MySQL installation/configuration
+  ansible.builtin.import_playbook: 01-install-mysql.yml
+  when: domain_config is defined and domain_config.platform is defined
 
-- name: Import WordPress SSL playbook
-  import_playbook: 05-obtain-ssl.yml
-  when: platform == "wordpress"
+- name: Import Nginx installation/configuration for the domain
+  ansible.builtin.import_playbook: 02-install-nginx.yml
+  when: domain_config is defined and domain_config.platform is defined
 
-# Laravel Playbooks
-- name: Import Laravel update-upgrade playbook
-  import_playbook: 00-update-upgrade.yml
-  when: platform == "laravel"
+- name: Import PHP, Composer, and WP-CLI installation
+  ansible.builtin.import_playbook: 03-install-php-composer-wpcli.yml
+  when: domain_config is defined and domain_config.platform is defined
 
-- name: Import Laravel MySQL playbook
-  import_playbook: 01-install-mysql.yml
-  when: platform == "laravel"
+# Platform-Specific Core Installation
+- name: WordPress Specific Core Setup
+  ansible.builtin.import_playbook: 04-install-wordpress.yml
+  when: domain_config is defined and domain_config.platform == "wordpress"
 
-- name: Import Laravel Nginx playbook
-  import_playbook: 02-install-nginx.yml
-  when: platform == "laravel"
+- name: Laravel Specific Core Setup & Configuration
+  block:
+    - name: Import Laravel installation playbook
+      ansible.builtin.import_playbook: laravel/01-install-laravel.yml
 
-- name: Import Laravel PHP/Composer/WP-CLI playbook
-  import_playbook: 03-install-php-composer-wpcli.yml
-  when: platform == "laravel"
+    - name: Import Laravel configuration playbook
+      ansible.builtin.import_playbook: laravel/02-configure-laravel.yml
+  when: domain_config is defined and domain_config.platform == "laravel"
 
-- name: Import Laravel installation playbook
-  import_playbook: laravel/01-install-laravel.yml
-  when: platform == "laravel"
+# SSL Configuration (Common, but often follows platform setup)
+- name: Import SSL certificate obtain/renew playbook
+  ansible.builtin.import_playbook: 05-obtain-ssl.yml
+  when: domain_config is defined and domain_config.platform is defined and (domain_config.ssl_email is defined and domain_config.ssl_email != "")
 
-- name: Import Laravel SSL playbook
-  import_playbook: 05-obtain-ssl.yml
-  when: platform == "laravel"
+# Optional features (examples - run_playbooks.sh has more granular control)
+# These playbooks should internally check their respective enable flags from domain_config,
+# potentially falling back to global settings.
 
-- name: Import Laravel configuration playbook
-  import_playbook: laravel/02-configure-laravel.yml
-  when: platform == "laravel"
+- name: Optional - Install Redis (if enabled for the domain or globally)
+  ansible.builtin.import_playbook: 06-install-redis.yml
+  # The condition for running this is now inside 06-install-redis.yml
+  # (e.g., when: domain_config.install_redis | default(GLOBAL_INSTALL_REDIS | default(false)) )
+  # or handled by run_playbooks.sh. For site.yml, we can make it conditional on the platform supporting it.
+  when: domain_config is defined and (domain_config.platform == "wordpress" or domain_config.platform == "laravel")
+
+# Add other critical playbooks that should always run after the main setup if this site.yml is used.
+# For instance, backups, basic security, etc., if not granularly controlled by run_playbooks.sh for this use case.
+# Example:
+# - name: Setup Backups (if enabled)
+#   ansible.builtin.import_playbook: 07-setup-backups.yml
+#   when: domain_config is defined and (domain_config.enable_backups | default(GLOBAL_ENABLE_BACKUPS_MASTER_SWITCH | default(false)))

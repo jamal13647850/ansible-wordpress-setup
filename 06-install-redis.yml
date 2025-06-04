@@ -1,39 +1,84 @@
+# 06-install-redis.yml
 - hosts: all
   become: true
+  vars:
+    # Determine if Redis installation/management is enabled for this run
+    # (based on domain_config or global setting)
+    effective_install_redis: "{{ domain_config.install_redis | default(GLOBAL_INSTALL_REDIS | default(false)) }}"
+
+    # Determine Redis password
+    # generate_config.sh currently might write 'wp_redis_password' under domain_config.
+    # We prefer a generic 'redis_password' or a global one.
+    _domain_specific_redis_pass: "{{ domain_config.redis_password | default(domain_config.wp_redis_password | default('')) }}"
+    effective_redis_password: "{{ _domain_specific_redis_pass | default(GLOBAL_REDIS_PASSWORD | default('')) }}"
+    # Note: If effective_redis_password remains empty, Redis will run without a password by default
+    # unless the default redis.conf has a password set. This playbook will only set 'requirepass'
+    # if a password is provided via effective_redis_password.
+
   tasks:
-    - name: Install Redis server
-      apt:
+    - name: Install Redis server package
+      ansible.builtin.apt:
         name: redis-server
         state: present
         update_cache: yes
-      when: install_redis | bool
+      when: effective_install_redis | bool
+      tags: ['redis', 'install', 'system']
 
-    - name: Configure Redis bind address
-      lineinfile:
+    - name: Configure Redis to bind to localhost only (recommended for security)
+      ansible.builtin.lineinfile:
         path: /etc/redis/redis.conf
         regexp: '^bind\s+.*'
-        line: 'bind 127.0.0.1 ::1'
-      when: install_redis | bool
-      notify: Restart Redis
+        line: 'bind 127.0.0.1 ::1' # Listen on localhost IPv4 and IPv6
+        owner: redis
+        group: redis
+        mode: '0640' # Default mode for redis.conf
+      when: effective_install_redis | bool
+      notify: Restart Redis service
+      tags: ['redis', 'config', 'security']
 
-    - name: Set Redis password
-      lineinfile:
+    - name: Set Redis password (if a password is provided)
+      ansible.builtin.lineinfile:
         path: /etc/redis/redis.conf
-        regexp: '^#?\s*requirepass\s+.*'
-        line: 'requirepass {{ wp_redis_password }}'
-      when: install_redis | bool
-      notify: Restart Redis
+        regexp: '^#?\s*requirepass\s+.*' # Matches commented or uncommented requirepass
+        line: "requirepass {{ effective_redis_password }}"
+        owner: redis
+        group: redis
+        mode: '0640'
+      when:
+        - effective_install_redis | bool
+        - effective_redis_password | length > 0 # Only set if password is not empty
+      notify: Restart Redis service
+      tags: ['redis', 'config', 'security']
 
-    - name: Start and enable Redis service
-      systemd:
-        name: redis-server
+    - name: Ensure Redis 'requirepass' is commented out if no password is provided
+      ansible.builtin.lineinfile:
+        path: /etc/redis/redis.conf
+        regexp: '^(?<!#)(requirepass\s+.*)' # Matches uncommented requirepass
+        line: '# \1' # Comments it out
+        backrefs: yes
+        owner: redis
+        group: redis
+        mode: '0640'
+      when:
+        - effective_install_redis | bool
+        - effective_redis_password | length == 0 # Only comment out if password is empty
+      notify: Restart Redis service
+      tags: ['redis', 'config', 'security']
+      # This ensures that if a password was previously set and now it's empty,
+      # the requirepass line gets commented out.
+
+    - name: Ensure Redis service is started and enabled
+      ansible.builtin.systemd:
+        name: redis-server # Common service name on Debian/Ubuntu
         state: started
         enabled: yes
-      when: install_redis | bool
+      when: effective_install_redis | bool
+      tags: ['redis', 'service']
 
   handlers:
-    - name: Restart Redis
-      service:
+    - name: Restart Redis service
+      ansible.builtin.systemd:
         name: redis-server
         state: restarted
-      when: install_redis | bool
+      listen: "Restart Redis service" # Explicit listener
+      when: effective_install_redis | bool # Handler should also be conditional

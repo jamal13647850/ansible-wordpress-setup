@@ -1,80 +1,155 @@
----
 # laravel/06-laravel-octane.yml
 - hosts: all
   become: true
+  vars:
+    # Determine if Laravel Octane is enabled for this domain
+    effective_enable_octane: "{{ domain_config.enable_octane | default(GLOBAL_LARAVEL_ENABLE_OCTANE | default(false)) }}"
+    # Determine Octane server type
+    effective_octane_server: "{{ domain_config.octane_server | default(GLOBAL_LARAVEL_OCTANE_SERVER | default('swoole')) }}" # 'swoole' or 'roadrunner'
+    # Effective PHP version (needed for Swoole PECL install path)
+    effective_php_version: "{{ domain_config.php_version | default(GLOBAL_PHP_DEFAULT_VERSION | default('8.2')) }}"
+
+    _app_domain: "{{ domain_config.domain }}"
+    _laravel_webroot: "/var/www/{{ _app_domain }}/html"
+    _app_domain_slug: "{{ _app_domain | replace('.', '-') | replace('_', '-') }}"
+    _laravel_octane_service_name: "laravel-octane-{{ _app_domain_slug }}.service"
+
+    _web_user: "www-data" # User for composer and artisan commands
+    _web_group: "www-data"
+
+    # Variables used by laravel-octane.service.j2 (can be made more configurable)
+    _octane_service_host: "{{ domain_config.octane_service_host | default(GLOBAL_LARAVEL_OCTANE_HOST | default('127.0.0.1')) }}"
+    _octane_service_port: "{{ domain_config.octane_service_port | default(GLOBAL_LARAVEL_OCTANE_PORT | default(8000)) }}" # Default Octane port
+
+  # This playbook is specific to Laravel and runs only if Octane is enabled.
+  when:
+    - domain_config is defined
+    - domain_config.platform is defined and domain_config.platform == "laravel"
+    - effective_enable_octane | bool
+
   tasks:
-    - name: Install required packages for Swoole
-      apt:
+    - name: Install prerequisite packages for Swoole (if Swoole is the Octane server)
+      ansible.builtin.apt:
         name:
           - libssl-dev
           - openssl
+          - php{{ effective_php_version }}-dev # Needed for PECL builds
         state: present
-      when: 
-        - domain_config.enable_octane | default(false) | bool
-        - domain_config.octane_server | default('swoole') == 'swoole'
-    
-    - name: Install Swoole PHP extension
-      shell: |
-        pecl install swoole
-        echo "extension=swoole.so" > /etc/php/{{ domain_config.php_version }}/mods-available/swoole.ini
-        phpenmod swoole
+        update_cache: yes
+      when: effective_octane_server == 'swoole'
+      tags: ['laravel', 'octane', 'swoole', 'prerequisites', 'system']
+
+    - name: Install Swoole PHP extension via PECL (if Swoole is the Octane server)
+      ansible.builtin.shell:
+        cmd: |
+          pecl channel-update pecl.php.net
+          pecl install swoole
+          echo "extension=swoole.so" > /etc/php/{{ effective_php_version }}/mods-available/swoole.ini
+          phpenmod -v {{ effective_php_version }} swoole
       args:
-        creates: /etc/php/{{ domain_config.php_version }}/mods-available/swoole.ini
-      when: 
-        - domain_config.enable_octane | default(false) | bool
-        - domain_config.octane_server | default('swoole') == 'swoole'
-      notify: Restart PHP-FPM
-    
-    - name: Install Laravel Octane
-      become: yes
-      become_user: www-data
-      shell: |
-        cd /var/www/{{ domain_config.domain }}/html
-        composer require laravel/octane
-      when: domain_config.enable_octane | default(false) | bool
-    
-    - name: Install Octane with selected server
-      become: yes
-      become_user: www-data
-      shell: |
-        cd /var/www/{{ domain_config.domain }}/html
-        php artisan octane:install --server={{ domain_config.octane_server | default('swoole') }}
-      when: domain_config.enable_octane | default(false) | bool
-    
-    - name: Create Laravel Octane systemd service
-      template:
+        creates: "/etc/php/{{ effective_php_version }}/mods-available/swoole.ini" # Idempotency check
+      register: swoole_install_result
+      changed_when: "'already installed' not in swoole_install_result.stderr and (swoole_install_result.rc == 0 or 'enable' in swoole_install_result.stdout)"
+      failed_when: swoole_install_result.rc != 0 and 'already installed' not in swoole_install_result.stderr
+      when: effective_octane_server == 'swoole'
+      notify: Restart PHP-FPM service
+      tags: ['laravel', 'octane', 'swoole', 'pecl', 'php_extension']
+      # Note: Ensure PECL and php-dev packages are installed. phpX.X-dev added above.
+
+    # Add tasks for RoadRunner installation if effective_octane_server == 'roadrunner'
+    # This would involve downloading the RoadRunner binary (rr) and making it executable.
+    # Example:
+    # - name: Install RoadRunner binary (if RoadRunner is the Octane server)
+    #   ansible.builtin.get_url:
+    #     url: "https://github.com/roadrunner-server/roadrunner/releases/download/vX.Y.Z/roadrunner-X.Y.Z-linux-amd64.tar.gz" # Replace X.Y.Z
+    #     dest: "/tmp/roadrunner.tar.gz"
+    #   when: effective_octane_server == 'roadrunner'
+    # - name: Extract RoadRunner binary
+    #   ansible.builtin.unarchive:
+    #     src: "/tmp/roadrunner.tar.gz"
+    #     dest: "/usr/local/bin/"
+    #     extra_opts: [--strip-components=1, roadrunner-X.Y.Z-linux-amd64/rr] # Adjust based on archive structure
+    #     remote_src: yes
+    #     creates: /usr/local/bin/rr
+    #   when: effective_octane_server == 'roadrunner'
+
+    - name: "Install Laravel Octane package for {{ _app_domain }}"
+      ansible.builtin.shell:
+        cmd: "composer require laravel/octane"
+        chdir: "{{ _laravel_webroot }}"
+      become: true
+      become_user: "{{ _web_user }}"
+      register: octane_package_install_result
+      changed_when: "'Nothing to install or update' not in octane_package_install_result.stdout"
+      failed_when: octane_package_install_result.rc != 0
+      tags: ['laravel', 'octane', 'composer', 'install']
+
+    - name: "Install Octane with server type '{{ effective_octane_server }}' for {{ _app_domain }}"
+      ansible.builtin.shell:
+        cmd: "php artisan octane:install --server={{ effective_octane_server }}"
+        chdir: "{{ _laravel_webroot }}"
+      become: true
+      become_user: "{{ _web_user }}"
+      register: octane_artisan_install_result
+      # This command might not output change consistently, assume change or check specific output
+      changed_when: octane_artisan_install_result.rc == 0 # Assuming it always does something or is idempotent
+      tags: ['laravel', 'octane', 'artisan', 'config']
+
+    - name: "Create systemd service file for Laravel Octane: {{ _laravel_octane_service_name }}"
+      ansible.builtin.template:
         src: templates/laravel-octane.service.j2
-        dest: "/etc/systemd/system/laravel-octane-{{ domain_config.domain | replace('.', '-') }}.service"
+        dest: "/etc/systemd/system/{{ _laravel_octane_service_name }}"
+        owner: root
+        group: root
         mode: '0644'
-      when: domain_config.enable_octane | default(false) | bool
-    
-    - name: Reload systemd
-      systemd:
-        daemon_reload: yes
-      when: domain_config.enable_octane | default(false) | bool
-    
-    - name: Enable and start Laravel Octane
-      systemd:
-        name: "laravel-octane-{{ domain_config.domain | replace('.', '-') }}"
+      # Pass variables needed by the template explicitly if they are not part of domain_config
+      # or to use effective_ values. Template uses domain_config.octane_server, .domain
+      # and hardcoded host/port. We defined _octane_service_host and _octane_service_port in vars.
+      # These should be passed to the template or the template modified to use them from domain_config.
+      # For now, template uses domain_config directly for octane_server and domain.
+      notify: Reload systemd and restart Octane service
+      tags: ['laravel', 'octane', 'systemd', 'config']
+
+    - name: "Enable and ensure Laravel Octane service is started: {{ _laravel_octane_service_name }}"
+      ansible.builtin.systemd:
+        name: "{{ _laravel_octane_service_name }}"
         state: started
         enabled: yes
-      when: domain_config.enable_octane | default(false) | bool
-    
-    - name: Configure Nginx for Octane
-      template:
-        src: templates/laravel-octane-nginx.conf.j2
-        dest: "/etc/nginx/sites-available/{{ domain_config.domain }}.conf"
+      tags: ['laravel', 'octane', 'systemd', 'service']
+
+    - name: "Configure Nginx as a reverse proxy for Laravel Octane on {{ _app_domain }}"
+      ansible.builtin.template:
+        src: "templates/laravel-octane-nginx.conf.j2" # CRITICAL: This template needs refactoring for single domain_config
+        dest: "/etc/nginx/sites-available/{{ _app_domain }}.conf" # Overwrites standard Nginx config
+        owner: root
+        group: root
         mode: '0644'
-      when: domain_config.enable_octane | default(false) | bool
-      notify: Restart Nginx
-  
+      notify: Restart Nginx service
+      tags: ['laravel', 'octane', 'nginx', 'config']
+      # Note: This assumes laravel-octane-nginx.conf.j2 will be modified to use domain_config
+      # for a single domain, and proxy to the correct Octane port (e.g., {{ _octane_service_port }}).
+
   handlers:
-    - name: Restart PHP-FPM
-      service:
-        name: "php{{ domain_config.php_version }}-fpm"
+    - name: Restart PHP-FPM service
+      ansible.builtin.systemd:
+        name: "php{{ effective_php_version }}-fpm"
         state: restarted
-    
-    - name: Restart Nginx
-      service:
+      listen: "Restart PHP-FPM service"
+
+    - name: Reload systemd and restart Octane service
+      ansible.builtin.systemd:
+        daemon_reload: yes
+      notify: "Actually restart Octane service for {{ _app_domain_slug }}"
+      listen: "Reload systemd and restart Octane service"
+
+    - name: "Actually restart Octane service for {{ _app_domain_slug }}"
+      ansible.builtin.systemd:
+        name: "{{ _laravel_octane_service_name }}"
+        state: restarted
+      listen: "Actually restart Octane service for {{ _app_domain_slug }}"
+
+    - name: Restart Nginx service
+      ansible.builtin.systemd:
         name: nginx
         state: restarted
+      listen: "Restart Nginx service"

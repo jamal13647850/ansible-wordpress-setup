@@ -1,24 +1,78 @@
+# 07-setup-backups.yml
 - hosts: all
   become: true
-  tasks:
-    - name: Create backup directory
-      file:
-        path: "{{ backup_dir }}"
-        state: directory
-        mode: '0700'
-        owner: "{{ linux_username }}"
-        group: "{{ linux_username }}"
-      when: enable_backups | bool
+  vars:
+    # --- Define effective variables for this playbook run ---
+    effective_enable_backups: "{{ domain_config.enable_backups | default(GLOBAL_ENABLE_BACKUPS_MASTER_SWITCH | default(false)) }}"
 
-    - name: Set up backup cron job
-      cron:
-        name: "Backup {{ domain }}"
-        minute: "{{ backup_freq.split()[0] }}"
-        hour: "{{ backup_freq.split()[1] }}"
-        day: "{{ backup_freq.split()[2] }}"
-        month: "{{ backup_freq.split()[3] }}"
-        weekday: "{{ backup_freq.split()[4] }}"
-        job: "mysqldump -u {{ mysql_db_user }} -p'{{ mysql_db_password }}' {{ mysql_db_name }} > {{ backup_dir }}/db-$(date +\\%Y\\%m\\%d).sql && tar -czf {{ backup_dir }}/files-$(date +\\%Y\\%m\\%d).tar.gz /var/www/{{ domain }}/html"
-        user: "{{ linux_username }}"
+    # Construct the domain-specific backup directory path
+    _backup_base_dir: "{{ domain_config.backup_dir_base | default(GLOBAL_BACKUP_BASE_DIR | default('/var/backups/ansible_managed')) }}"
+    effective_backup_dir: "{{ _backup_base_dir }}/{{ domain_config.domain }}"
+
+    effective_linux_username: "{{ domain_config.linux_username | default(GLOBAL_LINUX_USERNAME | default('ubuntu')) }}"
+    effective_backup_freq: "{{ domain_config.backup_freq | default(GLOBAL_BACKUP_DEFAULT_FREQ | default('0 2 * * *')) }}" # Daily at 2 AM by default
+
+    # Split backup frequency for cron module parameters
+    _split_freq: "{{ effective_backup_freq.split(' ') }}"
+    backup_minute: "{{ _split_freq[0] }}"
+    backup_hour: "{{ _split_freq[1] }}"
+    backup_day: "{{ _split_freq[2] }}"
+    backup_month: "{{ _split_freq[3] }}"
+    backup_weekday: "{{ _split_freq[4] }}"
+
+    # Database credentials from domain_config
+    # These must be defined in domain_config if backups are enabled and involve DB.
+    db_user_for_backup: "{{ domain_config.mysql_db_user }}"
+    db_password_for_backup: "{{ domain_config.mysql_db_password }}" # SECURITY WARNING: Password will be in cron job
+    db_name_for_backup: "{{ domain_config.mysql_db_name }}"
+
+    # Path to web application files
+    web_content_path: "/var/www/{{ domain_config.domain }}/html"
+
+    # Define backup file names with domain and precise timestamp
+    backup_date_format: "$(date +\\%Y-\\%m-\\%d_\\%H\\%M\\%S)"
+    db_backup_filename: "{{ domain_config.domain }}-db-{{ backup_date_format }}.sql.gz"
+    files_backup_filename: "{{ domain_config.domain }}-files-{{ backup_date_format }}.tar.gz"
+
+    # Full paths for backup files
+    db_backup_full_path: "{{ effective_backup_dir }}/{{ db_backup_filename }}"
+    files_backup_full_path: "{{ effective_backup_dir }}/{{ files_backup_filename }}"
+
+    # Backup job command string
+    # Using set -o pipefail to ensure failure of mysqldump propagates
+    # Using mysqldump options suitable for InnoDB.
+    # Logging basic errors from the cron job itself.
+    backup_job_command: >-
+      set -o pipefail;
+      mysqldump --user={{ db_user_for_backup }} --password='{{ db_password_for_backup }}' --single-transaction --quick --lock-tables=false {{ db_name_for_backup }} | gzip > {{ db_backup_full_path }} &&
+      tar -czf {{ files_backup_full_path }} -C {{ web_content_path | quote }} .
+      || echo "Backup failed for {{ domain_config.domain }} on $(date)" >> {{ effective_backup_dir }}/.backup_errors.log
+
+  # This entire playbook should only run if backups are enabled for the domain or globally.
+  when: effective_enable_backups | bool
+
+  tasks:
+    - name: "Ensure backup directory '{{ effective_backup_dir }}' exists"
+      ansible.builtin.file:
+        path: "{{ effective_backup_dir }}"
+        state: directory
+        mode: '0700' # Private to the backup user
+        owner: "{{ effective_linux_username }}"
+        group: "{{ effective_linux_username }}" # Or a common backup group
+      tags: ['backups', 'filesystem']
+
+    - name: "Set up backup cron job for domain: {{ domain_config.domain }}"
+      ansible.builtin.cron:
+        name: "Ansible Backup for {{ domain_config.domain }}" # Unique cron job name
+        minute: "{{ backup_minute }}"
+        hour: "{{ backup_hour }}"
+        day: "{{ backup_day }}"
+        month: "{{ backup_month }}"
+        weekday: "{{ backup_weekday }}"
+        user: "{{ effective_linux_username }}"
+        job: "{{ backup_job_command }}"
         state: present
-      when: enable_backups | bool
+        cron_file: "ansible_backup_{{ domain_config.domain | replace('.', '_') }}" # Creates a separate cron file under /etc/cron.d/
+      tags: ['backups', 'cron']
+      # Security Note: Storing DB password in cron job is a risk.
+      # Consider using ~/.my.cnf for the {{ effective_linux_username }} with restricted DB user.

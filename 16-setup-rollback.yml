@@ -1,12 +1,81 @@
+# 16-setup-rollback.yml
 - hosts: all
   become: true
-  tasks:
-    - name: Backup database before installation
-      shell: mysqldump -u {{ mysql_db_user }} -p'{{ mysql_db_password }}' {{ mysql_db_name }} > /var/backups/{{ domain }}-pre-install.sql
-      when: enable_rollback | bool
-      ignore_errors: true
+  vars:
+    # Determine if pre-action rollback backup is enabled
+    effective_enable_rollback: "{{ domain_config.enable_rollback | default(GLOBAL_ENABLE_ROLLBACK_POLICY | default(false)) }}"
 
-    - name: Backup files before installation
-      shell: tar -czf /var/backups/{{ domain }}-pre-install.tar.gz /var/www/{{ domain }}/html
-      when: enable_rollback | bool
-      ignore_errors: true
+    # Variables from domain_config
+    _app_domain: "{{ domain_config.domain }}"
+    _db_name: "{{ domain_config.mysql_db_name }}"
+    _db_user: "{{ domain_config.mysql_db_user }}"
+    _db_password: "{{ domain_config.mysql_db_password }}" # Sensitive
+    _web_root_path: "/var/www/{{ _app_domain }}/html"
+
+    # Backup destination and naming
+    _pre_action_backup_base_dir: "{{ domain_config.pre_action_backup_dir | default(GLOBAL_PRE_ACTION_BACKUP_DIR | default('/var/backups/ansible_pre_action')) }}"
+    _backup_timestamp: "{{ ansible_date_time.year }}-{{ ansible_date_time.month }}-{{ ansible_date_time.day }}_{{ ansible_date_time.hour }}{{ ansible_date_time.minute }}{{ ansible_date_time.second }}"
+
+    effective_pre_action_backup_dir_domain: "{{ _pre_action_backup_base_dir }}/{{ _app_domain }}"
+
+    db_backup_filename: "{{ _app_domain }}-db-pre_action-{{ _backup_timestamp }}.sql.gz"
+    files_backup_filename: "{{ _app_domain }}-files-pre_action-{{ _backup_timestamp }}.tar.gz"
+
+    db_backup_full_path: "{{ effective_pre_action_backup_dir_domain }}/{{ db_backup_filename }}"
+    files_backup_full_path: "{{ effective_pre_action_backup_dir_domain }}/{{ files_backup_filename }}"
+
+  # This entire playbook should only run if rollback backup is enabled.
+  when: effective_enable_rollback | bool
+
+  tasks:
+    - name: "Ensure pre-action backup directory exists for domain {{ _app_domain }}"
+      ansible.builtin.file:
+        path: "{{ effective_pre_action_backup_dir_domain }}"
+        state: directory
+        mode: '0700' # Restrict access to the backup directory
+        owner: root # Or a dedicated backup user
+        group: root # Or a dedicated backup group
+      tags: ['rollback', 'backup', 'filesystem']
+
+    - name: "Create pre-action database backup for {{ _app_domain }} to {{ db_backup_full_path }}"
+      ansible.builtin.shell:
+        cmd: "set -o pipefail; mysqldump --user={{ _db_user | quote }} --password={{ _db_password | quote }} --single-transaction --quick --lock-tables=false {{ _db_name | quote }} | gzip > {{ db_backup_full_path | quote }}"
+      register: db_backup_result
+      failed_when: db_backup_result.rc != 0
+      changed_when: db_backup_result.rc == 0 # Assume change if successful
+      no_log: true # Hide sensitive information
+      tags: ['rollback', 'backup', 'database']
+      # Note: Using ~/.my.cnf for credentials is more secure than password on command line.
+
+    - name: "Notify database backup status for {{ _app_domain }}"
+      ansible.builtin.debug:
+        msg: "Database pre-action backup for {{ _app_domain }} completed successfully to {{ db_backup_full_path }}."
+      when: db_backup_result.rc == 0
+      tags: ['rollback', 'backup', 'database', 'info']
+
+    - name: "Critical: Database pre-action backup FAILED for {{ _app_domain }}"
+      ansible.builtin.fail:
+        msg: "Database pre-action backup for {{ _app_domain }} FAILED. Stdout: {{ db_backup_result.stdout }}, Stderr: {{ db_backup_result.stderr }}. Cannot proceed safely."
+      when: db_backup_result.rc != 0
+      tags: ['rollback', 'backup', 'database', 'error']
+
+    - name: "Create pre-action files backup for {{ _app_domain }} to {{ files_backup_full_path }}"
+      ansible.builtin.shell:
+        cmd: "tar -czf {{ files_backup_full_path | quote }} -C {{ _web_root_path | quote }} ."
+        # -C changes directory so paths in tar are relative to _web_root_path
+      register: files_backup_result
+      failed_when: files_backup_result.rc != 0
+      changed_when: files_backup_result.rc == 0 # Assume change if successful
+      tags: ['rollback', 'backup', 'files']
+
+    - name: "Notify files backup status for {{ _app_domain }}"
+      ansible.builtin.debug:
+        msg: "Files pre-action backup for {{ _app_domain }} completed successfully to {{ files_backup_full_path }}."
+      when: files_backup_result.rc == 0
+      tags: ['rollback', 'backup', 'files', 'info']
+
+    - name: "Critical: Files pre-action backup FAILED for {{ _app_domain }}"
+      ansible.builtin.fail:
+        msg: "Files pre-action backup for {{ _app_domain }} FAILED. Stdout: {{ files_backup_result.stdout }}, Stderr: {{ files_backup_result.stderr }}. Cannot proceed safely."
+      when: files_backup_result.rc != 0
+      tags: ['rollback', 'backup', 'files', 'error']

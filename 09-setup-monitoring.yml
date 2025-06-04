@@ -1,19 +1,35 @@
+# 09-setup-monitoring.yml
 - hosts: all
   become: true
-  tasks:
-    - name: Install monitoring tools
-      apt:
-        name:
-          - htop
-          - logrotate
-        state: present
-      when: enable_monitoring | bool
+  vars:
+    # Determine if monitoring setup is enabled for this run
+    effective_enable_monitoring: "{{ domain_config.enable_monitoring | default(GLOBAL_ENABLE_MONITORING_TOOLS | default(false)) }}"
 
-    - name: Ensure log directory exists
-      file:
-        path: "/var/www/{{ domain }}/logs"
+    # Domain specific path for its logs directory
+    domain_log_path: "/var/www/{{ domain_config.domain }}/logs"
+
+  # This entire playbook should only run if monitoring is enabled for the domain or globally.
+  when: effective_enable_monitoring | bool
+
+  tasks:
+    - name: Install basic monitoring and log management tools
+      ansible.builtin.apt:
+        name:
+          - htop      # Interactive process viewer
+          - logrotate # Log rotation utility (usually installed, but ensure it is)
+        state: present
+        update_cache: yes
+      tags: ['monitoring', 'tools', 'system']
+
+    - name: "Ensure log directory exists for domain {{ domain_config.domain }} at {{ domain_log_path }}"
+      ansible.builtin.file:
+        path: "{{ domain_log_path }}"
         state: directory
-        mode: '0775'
+        mode: '0775' # rwxrwxr-x
         owner: www-data
-        group: www-data
-      when: enable_monitoring | bool
+        group: www-data # Or a common group like 'adm' if Nginx/PHP logs here with that group
+      tags: ['monitoring', 'logging', 'filesystem', 'domain_specific']
+      # Note: This directory might also be created by Nginx or application setup playbooks.
+      # This task ensures it exists with appropriate permissions if this playbook is run.
+      # No specific logrotate configurations for the domain are added here yet.
+      # That would typically involve adding a file to /etc/logrotate.d/

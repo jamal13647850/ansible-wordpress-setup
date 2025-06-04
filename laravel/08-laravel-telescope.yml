@@ -1,35 +1,117 @@
----
-# laravel/08-laravel-telescope.yml
+# laravel/07-laravel-websockets.yml
 - hosts: all
   become: true
+  vars:
+    # Determine if Laravel WebSockets is enabled for this domain
+    effective_enable_websockets: "{{ domain_config.enable_websockets | default(GLOBAL_LARAVEL_ENABLE_WEBSOCKETS | default(false)) }}"
+
+    _app_domain: "{{ domain_config.domain }}"
+    _laravel_webroot: "/var/www/{{ _app_domain }}/html"
+    _app_domain_slug: "{{ _app_domain | replace('.', '-') | replace('_', '-') }}"
+    _laravel_websockets_service_name: "laravel-websockets-{{ _app_domain_slug }}.service"
+
+    _web_user: "www-data" # User for composer and artisan commands
+    _web_group: "www-data"
+
+    # Variables for laravel-websockets.service.j2 & laravel-websockets-nginx.conf.j2
+    # The websockets:serve command defaults to host 0.0.0.0 and port 6001.
+    # These can be overridden in Laravel's config/websockets.php or via command options in the service file.
+    _websockets_service_host: "{{ domain_config.websockets_service_host | default(GLOBAL_LARAVEL_WEBSOCKETS_HOST | default('0.0.0.0')) }}"
+    _websockets_service_port: "{{ domain_config.websockets_service_port | default(GLOBAL_LARAVEL_WEBSOCKETS_PORT | default(6001)) }}"
+
+    # Nginx will typically proxy to 127.0.0.1:{{_websockets_service_port}}
+    _nginx_proxy_pass_ws_host: "127.0.0.1"
+    _nginx_proxy_pass_ws_url: "http://{{ _nginx_proxy_pass_ws_host }}:{{ _websockets_service_port }}"
+
+  # This playbook is specific to Laravel and runs only if WebSockets are enabled.
+  when:
+    - domain_config is defined
+    - domain_config.platform is defined and domain_config.platform == "laravel"
+    - effective_enable_websockets | bool
+
   tasks:
-    - name: Install Laravel Telescope
-      become: yes
-      become_user: www-data
-      shell: |
-        cd /var/www/{{ domain_config.domain }}/html
-        composer require laravel/telescope --dev
-      when: domain_config.enable_telescope | default(false) | bool
-    
-    - name: Publish Telescope configuration
-      become: yes
-      become_user: www-data
-      shell: |
-        cd /var/www/{{ domain_config.domain }}/html
-        php artisan telescope:install
-        php artisan migrate
-      when: domain_config.enable_telescope | default(false) | bool
-    
-    - name: Configure Telescope access
-      lineinfile:
-        path: "/var/www/{{ domain_config.domain }}/html/app/Providers/TelescopeServiceProvider.php"
-        regexp: "        Gate::define\\('viewTelescope', function \\(\\$user\\) \\{"
-        line: "        Gate::define('viewTelescope', function ($user = null) {"
-      when: domain_config.enable_telescope | default(false) | bool
-    
-    - name: Configure Telescope to allow access in production
-      lineinfile:
-        path: "/var/www/{{ domain_config.domain }}/html/app/Providers/TelescopeServiceProvider.php"
-        regexp: "            return \\$user->email === 'taylor@laravel.com';"
-        line: "            return true; // Allow all access for now, restrict in production"
-      when: domain_config.enable_telescope | default(false) | bool
+    - name: "Install beyondcode/laravel-websockets package for {{ _app_domain }}"
+      ansible.builtin.shell:
+        cmd: "composer require beyondcode/laravel-websockets"
+        chdir: "{{ _laravel_webroot }}"
+      become: true
+      become_user: "{{ _web_user }}"
+      register: websockets_install_result
+      changed_when: "'Nothing to install or update' not in websockets_install_result.stdout"
+      failed_when: websockets_install_result.rc != 0
+      tags: ['laravel', 'websockets', 'composer', 'install']
+
+    - name: "Publish Laravel WebSockets configuration and run migrations for {{ _app_domain }}"
+      ansible.builtin.shell:
+        cmd: |
+          php artisan vendor:publish --provider="BeyondCode\LaravelWebSockets\WebSocketsServiceProvider" --tag="config"
+          php artisan vendor:publish --provider="BeyondCode\LaravelWebSockets\WebSocketsServiceProvider" --tag="migrations"
+          php artisan migrate --force
+        chdir: "{{ _laravel_webroot }}"
+      become: true
+      become_user: "{{ _web_user }}"
+      register: websockets_publish_result
+      # Check for common success messages or simply if rc == 0
+      changed_when: "'Published' in websockets_publish_result.stdout or 'Copied' in websockets_publish_result.stdout or 'Migrating' in websockets_publish_result.stdout or 'Nothing to migrate.' in websockets_publish_result.stdout"
+      failed_when: "websockets_publish_result.rc != 0 and 'Nothing to migrate.' not in websockets_publish_result.stdout" # Allow 'Nothing to migrate'
+      tags: ['laravel', 'websockets', 'artisan', 'config', 'db']
+
+    - name: "Create systemd service file for Laravel WebSockets: {{ _laravel_websockets_service_name }}"
+      ansible.builtin.template:
+        src: templates/laravel-websockets.service.j2
+        dest: "/etc/systemd/system/{{ _laravel_websockets_service_name }}"
+        owner: root
+        group: root
+        mode: '0644'
+      # The template laravel-websockets.service.j2 will use domain_config.domain,
+      # and potentially _websockets_service_host, _websockets_service_port if made configurable in template.
+      notify: Reload systemd and restart WebSockets service
+      tags: ['laravel', 'websockets', 'systemd', 'config']
+
+    - name: "Enable and ensure Laravel WebSockets service is started: {{ _laravel_websockets_service_name }}"
+      ansible.builtin.systemd:
+        name: "{{ _laravel_websockets_service_name }}"
+        state: started
+        enabled: yes
+      tags: ['laravel', 'websockets', 'systemd', 'service']
+
+    - name: "Configure Nginx for Laravel WebSockets on {{ _app_domain }}"
+      ansible.builtin.template:
+        src: "templates/laravel-websockets-nginx.conf.j2" # CRITICAL: This template needs refactoring
+        dest: "/etc/nginx/sites-available/{{ _app_domain_slug }}-websockets.conf" # Unique config file name
+        owner: root
+        group: root
+        mode: '0644'
+      # This template needs to be adapted to use domain_config for a single domain
+      # and proxy to the correct _nginx_proxy_pass_ws_url.
+      notify: Restart Nginx service
+      tags: ['laravel', 'websockets', 'nginx', 'config']
+
+    - name: "Enable Nginx site for Laravel WebSockets: {{ _app_domain_slug }}-websockets.conf"
+      ansible.builtin.file:
+        src: "/etc/nginx/sites-available/{{ _app_domain_slug }}-websockets.conf"
+        dest: "/etc/nginx/sites-enabled/{{ _app_domain_slug }}-websockets.conf"
+        state: link
+        owner: root
+        group: root
+      notify: Restart Nginx service
+      tags: ['laravel', 'websockets', 'nginx', 'config']
+
+  handlers:
+    - name: Reload systemd and restart WebSockets service
+      ansible.builtin.systemd:
+        daemon_reload: yes
+      notify: "Actually restart WebSockets service for {{ _app_domain_slug }}"
+      listen: "Reload systemd and restart WebSockets service"
+
+    - name: "Actually restart WebSockets service for {{ _app_domain_slug }}"
+      ansible.builtin.systemd:
+        name: "{{ _laravel_websockets_service_name }}"
+        state: restarted
+      listen: "Actually restart WebSockets service for {{ _app_domain_slug }}"
+
+    - name: Restart Nginx service
+      ansible.builtin.systemd:
+        name: nginx
+        state: restarted
+      listen: "Restart Nginx service"

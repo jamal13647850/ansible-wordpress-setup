@@ -1,145 +1,198 @@
----
 # laravel/09-laravel-api.yml
 - hosts: all
   become: true
-  tasks:
-    - name: Install Laravel Sanctum for API authentication
-      become: yes
-      become_user: www-data
-      shell: |
-        cd /var/www/{{ domain_config.domain }}/html
-        composer require laravel/sanctum
-        php artisan vendor:publish --provider="Laravel\Sanctum\SanctumServiceProvider"
-        php artisan migrate
-      when: 
-        - domain_config.enable_api | default(false) | bool
-        - domain_config.enable_api_auth | default(false) | bool
-    
-    - name: Install API documentation package (Scribe)
-      become: yes
-      become_user: www-data
-      shell: |
-        cd /var/www/{{ domain_config.domain }}/html
-        composer require knuckleswtf/scribe
-        php artisan vendor:publish --provider="Knuckles\Scribe\ScribeServiceProvider" --tag="config"
-      when: 
-        - domain_config.enable_api | default(false) | bool
-        - domain_config.enable_api_docs | default(false) | bool
-    
-    - name: Create basic API controller
-      copy:
-        dest: "/var/www/{{ domain_config.domain }}/html/app/Http/Controllers/Api/ApiController.php"
-        content: |
-          <?php
-          
-          namespace App\Http\Controllers\Api;
-          
-          use App\Http\Controllers\Controller;
-          use Illuminate\Http\Request;
-          
-          class ApiController extends Controller
+  vars:
+    # Determine if API features are enabled for this domain
+    effective_enable_api: "{{ domain_config.enable_api | default(GLOBAL_LARAVEL_ENABLE_API | default(false)) }}"
+
+    # API specific feature flags from domain_config or globals
+    effective_enable_api_auth: "{{ domain_config.enable_api_auth | default(GLOBAL_LARAVEL_ENABLE_API_AUTH | default(effective_enable_api | bool)) }}" # Default to true if API is generally enabled
+    effective_enable_api_docs: "{{ domain_config.enable_api_docs | default(GLOBAL_LARAVEL_ENABLE_API_DOCS | default(false)) }}"
+    effective_enable_api_versioning: "{{ domain_config.enable_api_versioning | default(GLOBAL_LARAVEL_ENABLE_API_VERSIONING | default(false)) }}"
+    effective_enable_api_rate_limit: "{{ domain_config.enable_api_rate_limit | default(GLOBAL_LARAVEL_ENABLE_API_RATE_LIMIT | default(false)) }}"
+
+    _app_domain: "{{ domain_config.domain }}"
+    _laravel_webroot: "/var/www/{{ _app_domain }}/html"
+    _web_user: "www-data"
+    _web_group: "www-data"
+
+    # Variables for generated controller/routes content
+    _api_app_name: "{{ domain_config.laravel_app_name | default(_app_domain) }}"
+    _api_admin_email: "{{ domain_config.laravel_admin_email | default('admin@' + _app_domain) }}"
+
+    # Content for ApiController.php
+    _api_controller_content: |
+      <?php
+
+      namespace App\Http\Controllers\Api;
+
+      use App\Http\Controllers\Controller;
+      use Illuminate\Http\Request;
+      use Illuminate\Support\Carbon;
+
+      class ApiController extends Controller
+      {
+          /**
+           * @OA\Info(
+           * title="{{ _api_app_name }} API",
+           * version="1.0.0",
+           * description="API Documentation for {{ _api_app_name }}",
+           * @OA\Contact(
+           * email="{{ _api_admin_email }}"
+           * )
+           * )
+           */
+
+          /**
+           * Get API status
+           *
+           * @OA\Get(
+           * path="/api/status",
+           * tags={"Status"},
+           * summary="Get API status",
+           * @OA\Response(
+           * response=200,
+           * description="Success",
+           * @OA\JsonContent(
+           * @OA\Property(property="status", type="string", example="online"),
+           * @OA\Property(property="version", type="string", example="1.0.0"),
+           * @OA\Property(property="server_time", type="string", format="date-time")
+           * )
+           * )
+           * )
+           */
+          public function status()
           {
-              /**
-               * @OA\Info(
-               *     title="{{ domain_config.laravel_app_name }} API",
-               *     version="1.0.0",
-               *     description="API Documentation for {{ domain_config.laravel_app_name }}",
-               *     @OA\Contact(
-               *         email="{{ domain_config.laravel_admin_email }}"
-               *     )
-               * )
-               */
-              
-              /**
-               * Get API status
-               * 
-               * @OA\Get(
-               *     path="/api/status",
-               *     tags={"Status"},
-               *     summary="Get API status",
-               *     @OA\Response(
-               *         response=200,
-               *         description="Success",
-               *         @OA\JsonContent(
-               *             @OA\Property(property="status", type="string", example="online"),
-               *             @OA\Property(property="version", type="string", example="1.0.0"),
-               *             @OA\Property(property="server_time", type="string", format="date-time")
-               *         )
-               *     )
-               * )
-               */
-              public function status()
-              {
-                  return response()->json([
-                      'status' => 'online',
-                      'version' => '1.0.0',
-                      'server_time' => now()->toIso8601String()
-                  ]);
-              }
+              return response()->json([
+                  'status' => 'online',
+                  'version' => '1.0.0',
+                  'server_time' => Carbon::now()->toIso8601String()
+              ]);
           }
-        owner: www-data
-        group: www-data
+      }
+
+    # Content for routes/api.php
+    _api_routes_content: |
+      <?php
+
+      use Illuminate\Http\Request;
+      use Illuminate\Support\Facades\Route;
+      use App\Http\Controllers\Api\ApiController;
+
+      /*
+      |--------------------------------------------------------------------------
+      | API Routes
+      |--------------------------------------------------------------------------
+      |
+      | Here is where you can register API routes for your application. These
+      | routes are loaded by the RouteServiceProvider within a group which
+      | is assigned the "api" middleware group. Enjoy building your API!
+      |
+      */
+
+      Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
+          return $request->user();
+      });
+
+      Route::get('/status', [ApiController::class, 'status'])->name('api.status');
+
+      {% if effective_enable_api_versioning | bool %}
+      // API Versioning Example for v1
+      Route::prefix('v1')->name('api.v1.')->group(function () {
+          Route::get('/status', [ApiController::class, 'status'])->name('status');
+          // Add other v1 routes here
+      });
+      {% endif %}
+
+      {% if effective_enable_api_rate_limit | bool %}
+      // Rate limited routes example
+      Route::middleware(['throttle:api'])->group(function () {
+          // Add specific rate-limited routes here, e.g.:
+          // Route::get('/limited-resource', function () { return ['data' => 'limited']; });
+      });
+      {% endif %}
+
+  # This playbook is specific to Laravel and runs only if API features are generally enabled.
+  when:
+    - domain_config is defined
+    - domain_config.platform is defined and domain_config.platform == "laravel"
+    - effective_enable_api | bool
+
+  tasks:
+    - name: "Install Laravel Sanctum for API authentication on {{ _app_domain }}"
+      ansible.builtin.shell:
+        cmd: |
+          composer require laravel/sanctum
+          php artisan vendor:publish --provider="Laravel\Sanctum\SanctumServiceProvider" --tag="sanctum-migrations" --tag="sanctum-config"
+          php artisan migrate --force
+        chdir: "{{ _laravel_webroot }}"
+      become: true
+      become_user: "{{ _web_user }}"
+      when: effective_enable_api_auth | bool
+      register: sanctum_install_result
+      changed_when: "'Nothing to install or update' not in sanctum_install_result.stdout or 'Publishing complete.' in sanctum_install_result.stdout or 'Migration table created successfully.' in sanctum_install_result.stdout or 'Migrated:' in sanctum_install_result.stdout"
+      failed_when: "sanctum_install_result.rc != 0 and 'Nothing to migrate.' not in sanctum_install_result.stdout"
+      tags: ['laravel', 'api', 'auth', 'sanctum', 'composer', 'artisan']
+
+    - name: "Install Scribe for API documentation on {{ _app_domain }}"
+      ansible.builtin.shell:
+        cmd: |
+          composer require --dev knuckleswtf/scribe
+          php artisan vendor:publish --provider="Knuckles\Scribe\ScribeServiceProvider" --tag="scribe-config"
+        chdir: "{{ _laravel_webroot }}"
+      become: true
+      become_user: "{{ _web_user }}"
+      when: effective_enable_api_docs | bool
+      register: scribe_install_result
+      changed_when: "'Nothing to install or update' not in scribe_install_result.stdout or 'Published' in scribe_install_result.stdout"
+      failed_when: scribe_install_result.rc != 0
+      tags: ['laravel', 'api', 'docs', 'scribe', 'composer', 'artisan']
+
+    - name: "Ensure API controller directory exists: {{ _laravel_webroot }}/app/Http/Controllers/Api"
+      ansible.builtin.file:
+        path: "{{ _laravel_webroot }}/app/Http/Controllers/Api"
+        state: directory
+        owner: "{{ _web_user }}"
+        group: "{{ _web_group }}"
+        mode: '0755'
+      tags: ['laravel', 'api', 'filesystem']
+
+    - name: "Create basic API controller with OpenAPI annotations for {{ _app_domain }}"
+      ansible.builtin.copy:
+        dest: "{{ _laravel_webroot }}/app/Http/Controllers/Api/ApiController.php"
+        content: "{{ _api_controller_content }}"
+        owner: "{{ _web_user }}"
+        group: "{{ _web_group }}"
         mode: '0644'
-      when: domain_config.enable_api | default(false) | bool
-    
-    - name: Create API routes file
-      copy:
-        dest: "/var/www/{{ domain_config.domain }}/html/routes/api.php"
-        content: |
-          <?php
-          
-          use Illuminate\Http\Request;
-          use Illuminate\Support\Facades\Route;
-          use App\Http\Controllers\Api\ApiController;
-          
-          /*
-          |--------------------------------------------------------------------------
-          | API Routes
-          |--------------------------------------------------------------------------
-          |
-          | Here is where you can register API routes for your application. These
-          | routes are loaded by the RouteServiceProvider within a group which
-          | is assigned the "api" middleware group. Enjoy building your API!
-          |
-          */
-          
-          Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
-              return $request->user();
-          });
-          
-          Route::get('/status', [ApiController::class, 'status']);
-          
-          {% if domain_config.enable_api_versioning | default(false) %}
-          // API Versioning
-          Route::prefix('v1')->group(function () {
-              Route::get('/status', [ApiController::class, 'status']);
-          });
-          {% endif %}
-          
-          {% if domain_config.enable_api_rate_limit | default(false) %}
-          // Rate limited routes
-          Route::middleware(['throttle:api'])->group(function () {
-              // Add rate-limited routes here
-          });
-          {% endif %}
-        owner: www-data
-        group: www-data
+      tags: ['laravel', 'api', 'controller']
+
+    - name: "Create/Update API routes file (routes/api.php) for {{ _app_domain }}"
+      ansible.builtin.copy: # Using copy with content which acts like template here due to Jinja2 in _api_routes_content
+        dest: "{{ _laravel_webroot }}/routes/api.php"
+        content: "{{ _api_routes_content }}"
+        owner: "{{ _web_user }}"
+        group: "{{ _web_group }}"
         mode: '0644'
-      when: domain_config.enable_api | default(false) | bool
-    
-    - name: Update CORS configuration for API
-      lineinfile:
-        path: "/var/www/{{ domain_config.domain }}/html/config/cors.php"
-        regexp: "    'paths' => \\['api/\\*'\\],"
-        line: "    'paths' => ['api/*', 'sanctum/csrf-cookie'],"
-      when: domain_config.enable_api | default(false) | bool
-    
-    - name: Generate API documentation
-      become: yes
-      become_user: www-data
-      shell: |
-        cd /var/www/{{ domain_config.domain }}/html
-        php artisan scribe:generate
-      when: 
-        - domain_config.enable_api | default(false) | bool
-        - domain_config.enable_api_docs | default(false) | bool
+      tags: ['laravel', 'api', 'routes']
+
+    - name: "Update CORS configuration for API access on {{ _app_domain }}"
+      ansible.builtin.lineinfile:
+        path: "{{ _laravel_webroot }}/config/cors.php"
+        regexp: "^(\\s*)'paths' => \\['api/\\*'.*\\]," # Match existing 'paths' => ['api/*'] or similar
+        line: "\\1'paths' => ['api/*', 'sanctum/csrf-cookie'],"
+        backrefs: yes
+        state: present
+        create: false # Assume cors.php exists if this task is relevant
+      # This task should only run if Sanctum (auth) is enabled, as csrf-cookie is for Sanctum.
+      when: effective_enable_api_auth | bool
+      tags: ['laravel', 'api', 'cors', 'config']
+
+    - name: "Generate API documentation using Scribe for {{ _app_domain }}"
+      ansible.builtin.shell:
+        cmd: "php artisan scribe:generate"
+        chdir: "{{ _laravel_webroot }}"
+      become: true
+      become_user: "{{ _web_user }}"
+      when: effective_enable_api_docs | bool
+      changed_when: true # Assume docs are always (re)generated if task runs
+      tags: ['laravel', 'api', 'docs', 'scribe', 'artisan']

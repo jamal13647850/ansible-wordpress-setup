@@ -1,90 +1,169 @@
----
 # laravel/02-configure-laravel.yml
 - hosts: all
   become: true
+  # This playbook is specific to Laravel.
+  when:
+    - domain_config is defined
+    - domain_config.platform is defined and domain_config.platform == "laravel"
+  vars:
+    _app_domain: "{{ domain_config.domain }}"
+    _laravel_webroot: "/var/www/{{ _app_domain }}/html"
+    _env_file_path: "{{ _laravel_webroot }}/.env"
+    _web_user: "www-data" # Standard web user for Laravel application files
+    _web_group: "www-data"
+
+    # Determine APP_DEBUG value
+    _app_debug_bool: >-
+      {{
+        (domain_config.laravel_app_env | default('production') | lower in ['local', 'dev', 'development', 'testing']) or
+        (domain_config.app_debug | default(GLOBAL_APP_DEBUG_DEFAULT | default(false)) | bool)
+      }}
+    _app_debug_string: "{% if _app_debug_bool %}true{% else %}false{% endif %}"
+
+    # Effective Redis settings
+    _effective_install_redis: "{{ domain_config.install_redis | default(GLOBAL_INSTALL_REDIS | default(false)) }}"
+    _redis_host_candidate: "{{ domain_config.redis_host | default(domain_config.wp_redis_host | default(GLOBAL_REDIS_HOST | default('127.0.0.1'))) }}"
+    _redis_password_candidate: "{{ domain_config.redis_password | default(domain_config.wp_redis_password | default(GLOBAL_REDIS_PASSWORD | default('null'))) }}" # 'null' as string for .env if empty
+    _redis_port_candidate: "{{ domain_config.redis_port | default(domain_config.wp_redis_port | default(GLOBAL_REDIS_PORT | default('6379'))) }}"
+
+    # Effective SMTP settings
+    _effective_enable_smtp: "{{ domain_config.enable_smtp | default(GLOBAL_ENABLE_SMTP_MASTER_SWITCH | default(false)) }}"
+    _smtp_host_eff: "{{ domain_config.smtp_host | default(GLOBAL_SMTP_HOST | default('localhost')) }}"
+    _smtp_port_eff: "{{ domain_config.smtp_port | default(GLOBAL_SMTP_PORT | default(1025)) }}" # mailhog default
+    _smtp_user_eff: "{{ domain_config.smtp_username | default(GLOBAL_SMTP_USERNAME | default('')) }}" # Empty string for .env if not set
+    _smtp_pass_eff: "{{ domain_config.smtp_password | default(GLOBAL_SMTP_PASSWORD | default('')) }}" # Sensitive, empty string for .env
+    _smtp_enc_eff: "{{ domain_config.smtp_encryption | default(GLOBAL_SMTP_ENCRYPTION | default('null')) }}" # 'null' as string for .env if not set or 'tls'/'ssl'
+
+    # .env configuration items
+    env_vars_to_set:
+      - { key: "APP_NAME", value: "\"{{ domain_config.laravel_app_name | default(_app_domain) }}\"" }
+      - { key: "APP_ENV", value: "{{ domain_config.laravel_app_env | default('production') }}" }
+      - { key: "APP_KEY", value: "{{ domain_config.laravel_app_key | default('') }}" } # Will be generated if empty
+      - { key: "APP_DEBUG", value: "{{ _app_debug_string }}" }
+      - { key: "APP_URL", value: "https://{{ _app_domain }}" }
+      - { key: "LOG_CHANNEL", value: "stack" }
+      - { key: "LOG_LEVEL", value: "debug" } # Consider 'error' for production
+
+      - { key: "DB_CONNECTION", value: "mysql" }
+      - { key: "DB_HOST", value: "{{ domain_config.db_host | default(GLOBAL_DB_HOST | default('127.0.0.1')) }}" }
+      - { key: "DB_PORT", value: "{{ domain_config.db_port | default(GLOBAL_DB_PORT | default('3306')) }}" }
+      - { key: "DB_DATABASE", value: "{{ domain_config.mysql_db_name }}" }
+      - { key: "DB_USERNAME", value: "{{ domain_config.mysql_db_user }}" }
+      - { key: "DB_PASSWORD", value: "\"{{ domain_config.mysql_db_password }}\"" } # Quote password
+
+      - { key: "BROADCAST_DRIVER", value: "log" } # Default, update if using websockets (e.g., pusher)
+      - { key: "CACHE_DRIVER", value: "{{ 'redis' if _effective_install_redis | bool else 'file' }}" }
+      - { key: "FILESYSTEM_DISK", value: "local" } # Laravel 9+ uses FILESYSTEM_DISK
+      - { key: "QUEUE_CONNECTION", value: "{{ domain_config.queue_driver | default('sync') }}" }
+      - { key: "SESSION_DRIVER", value: "{{ 'redis' if _effective_install_redis | bool else 'file' }}" }
+      - { key: "SESSION_LIFETIME", value: "120" }
+
+      - { key: "MEMCACHED_HOST", value: "127.0.0.1" } # Default if memcached is used
+
+      - { key: "REDIS_HOST", value: "{{ _redis_host_candidate }}" }
+      - { key: "REDIS_PASSWORD", value: "{{ _redis_password_candidate }}" }
+      - { key: "REDIS_PORT", value: "{{ _redis_port_candidate }}" }
+
+      - { key: "MAIL_MAILER", value: "{{ 'smtp' if _effective_enable_smtp | bool else 'log' }}" }
+      - { key: "MAIL_HOST", value: "{{ _smtp_host_eff }}" }
+      - { key: "MAIL_PORT", value: "{{ _smtp_port_eff }}" }
+      - { key: "MAIL_USERNAME", value: "{{ _smtp_user_eff }}" }
+      - { key: "MAIL_PASSWORD", value: "{{ _smtp_pass_eff }}" } # Sensitive
+      - { key: "MAIL_ENCRYPTION", value: "{{ _smtp_enc_eff }}" }
+      - { key: "MAIL_FROM_ADDRESS", value: "{{ domain_config.laravel_admin_email | default('hello@' + _app_domain) }}" }
+      - { key: "MAIL_FROM_NAME", value: "\"{{ domain_config.laravel_app_name | default(_app_domain) }}\"" }
+
   tasks:
-    - name: Copy .env.example to .env
-      copy:
-        src: "/var/www/{{ domain_config.domain }}/html/.env.example"
-        dest: "/var/www/{{ domain_config.domain }}/html/.env"
+    - name: "Ensure .env file exists for {{ _app_domain }} by copying from .env.example"
+      ansible.builtin.copy:
+        src: "{{ _laravel_webroot }}/.env.example"
+        dest: "{{ _env_file_path }}"
         remote_src: yes
-        owner: www-data
-        group: www-data
-        mode: '0644'
-      
-    - name: Configure Laravel environment variables
-      lineinfile:
-        path: "/var/www/{{ domain_config.domain }}/html/.env"
+        owner: "{{ _web_user }}"
+        group: "{{ _web_group }}"
+        mode: '0600' # Secure .env file
+        force: no # Do not overwrite if .env already exists
+      tags: ['laravel', 'config', 'env']
+
+    - name: "Configure Laravel environment variables in {{ _env_file_path }}"
+      ansible.builtin.lineinfile:
+        path: "{{ _env_file_path }}"
         regexp: "^{{ item.key }}="
         line: "{{ item.key }}={{ item.value }}"
-      with_items:
-        - { key: "APP_NAME", value: "\"{{ domain_config.laravel_app_name }}\"" }
-        - { key: "APP_ENV", value: "{{ domain_config.laravel_app_env }}" }
-        - { key: "APP_DEBUG", value: "{{ 'true' if domain_config.laravel_app_env == 'local' else 'false' }}" }
-        - { key: "APP_URL", value: "https://{{ domain_config.domain }}" }
-        - { key: "APP_KEY", value: "{{ domain_config.laravel_app_key }}" }
-        - { key: "DB_CONNECTION", value: "mysql" }
-        - { key: "DB_HOST", value: "127.0.0.1" }
-        - { key: "DB_PORT", value: "3306" }
-        - { key: "DB_DATABASE", value: "{{ domain_config.mysql_db_name }}" }
-        - { key: "DB_USERNAME", value: "{{ domain_config.mysql_db_user }}" }
-        - { key: "DB_PASSWORD", value: "{{ domain_config.mysql_db_password }}" }
-        - { key: "MAIL_MAILER", value: "{{ 'smtp' if domain_config.enable_smtp | default(false) else 'log' }}" }
-        - { key: "MAIL_HOST", value: "{{ domain_config.smtp_host | default('mailhog') }}" }
-        - { key: "MAIL_PORT", value: "{{ domain_config.smtp_port | default('1025') }}" }
-        - { key: "MAIL_USERNAME", value: "{{ domain_config.smtp_username | default('null') }}" }
-        - { key: "MAIL_PASSWORD", value: "{{ domain_config.smtp_password | default('null') }}" }
-        - { key: "MAIL_ENCRYPTION", value: "{{ domain_config.smtp_encryption | default('null') }}" }
-        - { key: "MAIL_FROM_ADDRESS", value: "{{ domain_config.laravel_admin_email }}" }
-        - { key: "MAIL_FROM_NAME", value: "\"{{ domain_config.laravel_app_name }}\"" }
-        - { key: "CACHE_DRIVER", value: "{{ 'redis' if domain_config.install_redis | default(false) else 'file' }}" }
-        - { key: "QUEUE_CONNECTION", value: "{{ domain_config.queue_driver | default('sync') }}" }
-        - { key: "SESSION_DRIVER", value: "{{ 'redis' if domain_config.install_redis | default(false) else 'file' }}" }
-        - { key: "SESSION_LIFETIME", value: "120" }
-        - { key: "REDIS_HOST", value: "{{ domain_config.wp_redis_host | default('127.0.0.1') if domain_config.install_redis | default(false) else '127.0.0.1' }}" }
-        - { key: "REDIS_PASSWORD", value: "{{ domain_config.wp_redis_password | default('null') if domain_config.install_redis | default(false) else 'null' }}" }
-        - { key: "REDIS_PORT", value: "{{ domain_config.wp_redis_port | default('6379') if domain_config.install_redis | default(false) else '6379' }}" }
-    
-    - name: Generate Laravel application key if not provided
-      shell: |
-        cd /var/www/{{ domain_config.domain }}/html
-        php artisan key:generate --force
+        owner: "{{ _web_user }}"
+        group: "{{ _web_group }}"
+        mode: '0600' # Keep .env secure
+      loop: "{{ env_vars_to_set }}"
+      loop_control:
+        label: "{{ item.key }}"
+      no_log: true # Hide sensitive values from output
+      tags: ['laravel', 'config', 'env']
+
+    - name: "Generate Laravel application key (APP_KEY) if not set for {{ _app_domain }}"
+      ansible.builtin.shell:
+        cmd: "php artisan key:generate --force --quiet"
+        chdir: "{{ _laravel_webroot }}"
       become: true
-      become_user: www-data
-      when: domain_config.laravel_app_key is not defined or domain_config.laravel_app_key == ""
-    
-    - name: Run Laravel migrations
-      shell: |
-        cd /var/www/{{ domain_config.domain }}/html
-        php artisan migrate --force
+      become_user: "{{ _web_user }}"
+      # Only run if APP_KEY from domain_config is empty (it's generated by generate_config.sh if it was empty there)
+      # Or if the .env file has an empty APP_KEY after templating (unlikely with current setup).
+      # A more robust check would be to read APP_KEY from .env and see if it's empty/placeholder.
+      # For now, relying on domain_config.laravel_app_key which should be pre-filled.
+      # This task will run if domain_config.laravel_app_key was initially empty and then filled by generate_config.sh.
+      # If generate_config.sh *always* generates it, this task might be redundant unless we verify .env
+      when: >
+        (domain_config.laravel_app_key is not defined or domain_config.laravel_app_key | length == 0) or
+        (lookup('file', _env_file_path, errors='ignore') is not none and (lookup('ini', 'APP_KEY type=properties file=' + _env_file_path) | default('') | length == 0 or 'base64:' not in (lookup('ini', 'APP_KEY type=properties file=' + _env_file_path) | default(''))))
+      changed_when: true # Assume key generation always changes state for safety.
+      tags: ['laravel', 'config', 'key']
+
+    - name: "Run Laravel migrations for {{ _app_domain }}"
+      ansible.builtin.shell:
+        cmd: "php artisan migrate --force" # --force is for production confirmation
+        chdir: "{{ _laravel_webroot }}"
       become: true
-      become_user: www-data
-      ignore_errors: true
-    
-    - name: Configure Nginx for Laravel
-      template:
-        src: templates/laravel-nginx.conf.j2
-        dest: "/etc/nginx/sites-available/{{ domain_config.domain }}.conf"
+      become_user: "{{ _web_user }}"
+      register: migration_result
+      changed_when: "'Nothing to migrate.' not in migration_result.stdout and migration_result.rc == 0"
+      failed_when: migration_result.rc != 0
+      tags: ['laravel', 'db', 'migrations']
+      # ignore_errors: false # IMPORTANT: Do not ignore migration errors in production.
+
+    - name: "Configure Nginx for Laravel site: {{ _app_domain }}"
+      ansible.builtin.template:
+        src: "templates/laravel-nginx.conf.j2" # CRITICAL: This template needs to be refactored for single domain_config
+        dest: "/etc/nginx/sites-available/{{ _app_domain }}.conf"
         mode: '0644'
-      notify: Restart Nginx
-    
-    - name: Enable Nginx site
-      file:
-        src: "/etc/nginx/sites-available/{{ domain_config.domain }}.conf"
-        dest: "/etc/nginx/sites-enabled/{{ domain_config.domain }}.conf"
+        owner: root
+        group: root
+      notify: Restart Nginx service
+      tags: ['laravel', 'nginx', 'config']
+
+    - name: "Enable Nginx site for {{ _app_domain }}"
+      ansible.builtin.file:
+        src: "/etc/nginx/sites-available/{{ _app_domain }}.conf"
+        dest: "/etc/nginx/sites-enabled/{{ _app_domain }}.conf"
         state: link
-      notify: Restart Nginx
-    
-    - name: Optimize Laravel
-      shell: |
-        cd /var/www/{{ domain_config.domain }}/html
-        php artisan optimize
+        owner: root
+        group: root
+      notify: Restart Nginx service
+      tags: ['laravel', 'nginx', 'config']
+
+    - name: "Optimize Laravel application for production (config, route caching)"
+      ansible.builtin.shell:
+        cmd: "php artisan optimize" # For Laravel <10. For L10+, consider 'config:cache', 'route:cache', 'view:cache'
+        chdir: "{{ _laravel_webroot }}"
       become: true
-      become_user: www-data
-      when: domain_config.laravel_app_env != 'local'
-  
+      become_user: "{{ _web_user }}"
+      when: domain_config.laravel_app_env | default('production') | lower != 'local' and domain_config.laravel_app_env | default('production') | lower != 'development'
+      changed_when: false # Optimization commands are usually idempotent or their change isn't critical for handlers here.
+      tags: ['laravel', 'optimize', 'performance']
+      # Note: `php artisan optimize` is less emphasized in L10+.
+      # Consider `php artisan config:cache && php artisan route:cache && php artisan view:cache` for newer versions.
+
   handlers:
-    - name: Restart Nginx
-      service:
+    - name: Restart Nginx service
+      ansible.builtin.systemd:
         name: nginx
         state: restarted
+      listen: "Restart Nginx service"

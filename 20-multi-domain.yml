@@ -1,9 +1,47 @@
+# 20-multi-domain.yml
 - hosts: all
-  become: true
+  become: true # May not be needed if only debug tasks remain
+  vars:
+    effective_enable_multi_domain: "{{ domain_config.enable_multi_domain | default(GLOBAL_ENABLE_MULTI_DOMAIN_POLICY | default(false)) }}"
+    effective_enable_parked_domains: "{{ domain_config.enable_parked_domains | default(GLOBAL_ENABLE_PARKED_DOMAINS_POLICY | default(false)) }}"
+
+  # This playbook will only proceed if either multi_domain or parked_domains feature is enabled.
+  when: domain_config is defined and (effective_enable_multi_domain | bool or effective_enable_parked_domains | bool)
+
   tasks:
-    - name: Configure Nginx for extra domains
-      template:
-        src: templates/nginx.conf.j2
-        dest: "/etc/nginx/sites-available/{{ domain }}"
-      notify: Restart Nginx
-      when: enable_multi_domain | bool or enable_parked_domains | bool
+    - name: "Notice: Multi-domain/Parked domain Nginx configuration"
+      ansible.builtin.debug:
+        msg: |
+          Playbook '20-multi-domain.yml' for domain '{{ domain_config.domain }}'.
+          Flags effective_enable_multi_domain={{ effective_enable_multi_domain }} and effective_enable_parked_domains={{ effective_enable_parked_domains }}.
+          
+          IMPORTANT: Actual Nginx server alias configuration for multi-domain or parked domains
+          (e.g., adding them to the 'server_name' directive) should be handled within the
+          main Nginx configuration template (e.g., templates/nginx.conf.j2 or templates/laravel-nginx.conf.j2)
+          used by '02-install-nginx.yml' or platform-specific Nginx configuration playbooks.
+          
+          This playbook ('20-multi-domain.yml') is currently a placeholder.
+          If 'enable_multi_domain' or 'enable_parked_domains' was selected in generate_config.sh,
+          ensure that 'generate_config.sh' populates a list like 'domain_config.extra_server_names'
+          or 'domain_config.server_aliases', and that the main Nginx template uses this list.
+          
+          No direct Nginx configuration changes will be made by this specific task.
+      tags: ['nginx', 'multi_domain', 'parked_domain', 'info']
+
+    # Add any *additional* specific tasks for multi-domain/parked_domain scenarios here
+    # if they go beyond simple server_name alias configuration.
+    # For example, setting up specific redirects for parked domains if they shouldn't show main content.
+    # - name: "Example: Setup specific redirect for a parked domain (if needed)"
+    #   ansible.builtin.template:
+    #     src: templates/parked_domain_redirect.conf.j2
+    #     dest: "/etc/nginx/sites-available/{{ domain_config.domain }}helper/parked_redirect_{{ item }}.conf"
+    #   loop: "{{ domain_config.parked_domain_list_to_redirect | default([]) }}" # Requires this var in domain_config
+    #   notify: Restart Nginx service
+    #   when: effective_enable_parked_domains | bool and domain_config.parked_domain_list_to_redirect is defined
+
+  handlers:
+    - name: Restart Nginx service
+      ansible.builtin.systemd:
+        name: nginx
+        state: restarted
+      listen: "Restart Nginx service"

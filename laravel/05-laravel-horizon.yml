@@ -1,40 +1,83 @@
----
 # laravel/05-laravel-horizon.yml
 - hosts: all
   become: true
+  vars:
+    # Determine if Laravel Horizon is enabled for this domain
+    effective_enable_horizon: "{{ domain_config.enable_horizon | default(GLOBAL_LARAVEL_ENABLE_HORIZON | default(false)) }}"
+
+    _app_domain: "{{ domain_config.domain }}"
+    _laravel_webroot: "/var/www/{{ _app_domain }}/html"
+    # Create a systemd-friendly service name slug from the domain name
+    _app_domain_slug: "{{ _app_domain | replace('.', '-') | replace('_', '-') }}"
+    _laravel_horizon_service_name: "laravel-horizon-{{ _app_domain_slug }}.service"
+
+    _web_user: "www-data" # User for composer and artisan commands
+    _web_group: "www-data"
+
+    # Variables used by the template laravel-horizon.service.j2:
+    # domain_config.domain (used for description and paths)
+    # php_executable (implicitly /usr/bin/php in template)
+    # User, Group, RestartSec are hardcoded in template.
+
+  # This playbook is specific to Laravel and runs only if Horizon is enabled.
+  when:
+    - domain_config is defined
+    - domain_config.platform is defined and domain_config.platform == "laravel"
+    - effective_enable_horizon | bool
+
   tasks:
-    - name: Install Laravel Horizon
-      become: yes
-      become_user: www-data
-      shell: |
-        cd /var/www/{{ domain_config.domain }}/html
-        composer require laravel/horizon
-      when: domain_config.enable_horizon | default(false) | bool
-    
-    - name: Publish Horizon configuration
-      become: yes
-      become_user: www-data
-      shell: |
-        cd /var/www/{{ domain_config.domain }}/html
-        php artisan horizon:install
-        php artisan vendor:publish --provider="Laravel\Horizon\HorizonServiceProvider"
-      when: domain_config.enable_horizon | default(false) | bool
-    
-    - name: Create Laravel Horizon systemd service
-      template:
+    - name: "Install Laravel Horizon package for {{ _app_domain }}"
+      ansible.builtin.shell:
+        cmd: "composer require laravel/horizon"
+        chdir: "{{ _laravel_webroot }}"
+      become: true
+      become_user: "{{ _web_user }}"
+      register: horizon_install_result
+      changed_when: "'Nothing to install or update' not in horizon_install_result.stdout"
+      failed_when: horizon_install_result.rc != 0
+      tags: ['laravel', 'horizon', 'composer', 'install']
+
+    - name: "Publish Horizon assets and configuration for {{ _app_domain }}"
+      ansible.builtin.shell:
+        cmd: |
+          php artisan horizon:install
+          php artisan vendor:publish --provider="Laravel\Horizon\HorizonServiceProvider" --tag="public" --tag="config" --force
+          # Added --force to vendor:publish to ensure assets are updated if needed.
+          # horizon:install should be idempotent.
+        chdir: "{{ _laravel_webroot }}"
+      become: true
+      become_user: "{{ _web_user }}"
+      register: horizon_publish_result
+      changed_when: "'Published' in horizon_publish_result.stdout or 'Copied' in horizon_publish_result.stdout" # Check for publish messages
+      tags: ['laravel', 'horizon', 'artisan', 'config']
+
+    - name: "Create systemd service file for Laravel Horizon: {{ _laravel_horizon_service_name }}"
+      ansible.builtin.template:
         src: templates/laravel-horizon.service.j2
-        dest: "/etc/systemd/system/laravel-horizon-{{ domain_config.domain | replace('.', '-') }}.service"
+        dest: "/etc/systemd/system/{{ _laravel_horizon_service_name }}"
+        owner: root
+        group: root
         mode: '0644'
-      when: domain_config.enable_horizon | default(false) | bool
-    
-    - name: Reload systemd
-      systemd:
-        daemon_reload: yes
-      when: domain_config.enable_horizon | default(false) | bool
-    
-    - name: Enable and start Laravel Horizon
-      systemd:
-        name: "laravel-horizon-{{ domain_config.domain | replace('.', '-') }}"
+      notify: Reload systemd and restart Horizon service
+      tags: ['laravel', 'horizon', 'systemd', 'config']
+
+    - name: "Enable and ensure Laravel Horizon service is started: {{ _laravel_horizon_service_name }}"
+      ansible.builtin.systemd:
+        name: "{{ _laravel_horizon_service_name }}"
         state: started
-        enabled: yes
-      when: domain_config.enable_horizon | default(false) | bool
+        enabled: yes # Ensure it starts on boot
+      # This task runs after potential daemon_reload from handler.
+      tags: ['laravel', 'horizon', 'systemd', 'service']
+
+  handlers:
+    - name: Reload systemd and restart Horizon service
+      ansible.builtin.systemd:
+        daemon_reload: yes
+      notify: "Actually restart Horizon service for {{ _app_domain_slug }}" # Notify the next handler
+      listen: "Reload systemd and restart Horizon service"
+
+    - name: "Actually restart Horizon service for {{ _app_domain_slug }}"
+      ansible.builtin.systemd:
+        name: "{{ _laravel_horizon_service_name }}"
+        state: restarted
+      listen: "Actually restart Horizon service for {{ _app_domain_slug }}"

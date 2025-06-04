@@ -1,8 +1,65 @@
+# 18-setup-waf.yml
 - hosts: all
   become: true
+  vars:
+    # Determine if WAF setup is enabled for this run
+    effective_enable_waf: "{{ domain_config.enable_waf | default(GLOBAL_ENABLE_WAF_DEFAULT | default(false)) }}"
+
+    # Common package names for ModSecurity v3 library and Nginx connector
+    # These might vary slightly based on the OS distribution and Nginx source.
+    # This is a best-effort attempt to install common packages.
+    modsecurity_nginx_packages:
+      - libmodsecurity3
+      - libnginx-mod-http-modsecurity # Common name for the Nginx connector module
+      # Alternatively, some nginx-extras or nginx-full packages might include it.
+      # On some systems, 'nginx-module-modsecurity' might be the name.
+
+  # This entire playbook should only run if WAF is enabled.
+  when: effective_enable_waf | bool
+
   tasks:
-    - name: Install ModSecurity
-      apt:
-        name: libapache2-mod-security2
+    - name: Install ModSecurity library and Nginx connector module (best effort)
+      ansible.builtin.apt:
+        name: "{{ modsecurity_nginx_packages }}"
         state: present
-      when: enable_waf | bool
+        update_cache: yes
+      register: waf_install_result
+      tags: ['waf', 'security', 'modsecurity', 'system', 'install']
+      # NOTE: Successful installation of these packages does not guarantee a functional WAF.
+      # Extensive configuration of ModSecurity, Nginx, and rule sets (e.g., OWASP CRS) is required.
+
+    - name: Display ModSecurity package installation status
+      ansible.builtin.debug:
+        msg: |
+          ModSecurity package installation attempt status: {{ 'OK' if waf_install_result.changed or waf_install_result.rc == 0 else 'FAILED or ALREADY INSTALLED and NO CHANGE' }}
+          Further steps are CRITICAL for a functional WAF:
+          1. Configure ModSecurity (e.g., /etcnginx/modsecurity/modsecurity.conf or /etc/modsecurity/modsecurity.conf).
+          2. Download and configure a rule set (e.g., OWASP Core Rule Set).
+          3. Enable ModSecurity in your Nginx server blocks for specific domains/locations.
+          4. Test thoroughly.
+          This playbook ONLY attempts to install the base packages.
+      tags: ['waf', 'security', 'modsecurity', 'info']
+
+    # Placeholder for future tasks:
+    # - name: Download and configure OWASP Core Rule Set
+    #   ...
+    #
+    # - name: Create basic ModSecurity configuration
+    #   ansible.builtin.template:
+    #     src: templates/modsecurity.conf.j2
+    #     dest: /etc/nginx/modsecurity/modsecurity.conf # Path might vary
+    #   notify: Restart Nginx service
+    #
+    # - name: Enable ModSecurity in Nginx main configuration or specific server blocks
+    #   ansible.builtin.lineinfile:
+    #     path: /etc/nginx/nginx.conf # Or specific site conf
+    #     line: "modsecurity on;"
+    #     regexp: "#?modsecurity on;"
+    #   notify: Restart Nginx service
+
+  handlers:
+    - name: Restart Nginx service # This handler might be needed if Nginx conf is changed for ModSec
+      ansible.builtin.systemd:
+        name: nginx
+        state: restarted
+      listen: "Restart Nginx service"

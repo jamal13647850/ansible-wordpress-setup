@@ -1,26 +1,107 @@
+# 14-setup-docker.yml
 - hosts: all
   become: true
+  vars:
+    # Determine if Docker support is enabled for this run
+    effective_enable_docker: "{{ domain_config.enable_docker | default(GLOBAL_ENABLE_DOCKER_SUPPORT | default(false)) }}"
+
+    app_domain: "{{ domain_config.domain }}"
+    docker_compose_project_dir: "/var/www/{{ app_domain }}/docker" # Standardized directory for Docker specific files
+    docker_compose_file_path: "{{ docker_compose_project_dir }}/docker-compose.yml"
+
+    # These vars are examples of what the docker-compose.yml.j2 template might expect.
+    # They should be sourced from domain_config, which is populated by generate_config.sh.
+    # The template will use domain_config.mysql_db_user, domain_config.mysql_db_password, etc.
+    # The GLOBAL_MYSQL_ROOT_PASSWORD should be used if domain_config.mysql_root_password is not set.
+    # effective_mysql_root_password: "{{ domain_config.mysql_root_password | default(GLOBAL_MYSQL_ROOT_PASSWORD | default('CHANGE_THIS_DEFAULT_ROOT_PASS')) }}" # Vault this
+
+  # This entire playbook should only run if Docker support is enabled.
+  when: effective_enable_docker | bool
+
   tasks:
-    - name: Install Docker
-      apt:
-        name: docker.io
+    - name: Install Docker prerequisites
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
         state: present
-      when: enable_docker | bool
+        update_cache: yes
+      tags: ['docker', 'prerequisites', 'system']
 
-    - name: Install Docker Compose
-      apt:
-        name: docker-compose
+    - name: Add Docker's official GPG key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg
+        dest: /etc/apt/keyrings/docker.gpg
+        mode: '0644'
+        force: true # Overwrite if exists to ensure it's the latest key
+      tags: ['docker', 'repo', 'system']
+
+    - name: Add Docker's official repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch={{ ansible_architecture }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/{{ ansible_distribution | lower }} {{ ansible_distribution_release }} stable"
         state: present
-      when: enable_docker | bool
+        filename: docker # Creates /etc/apt/sources.list.d/docker.list
+        update_cache: yes
+      tags: ['docker', 'repo', 'system']
 
-    - name: Create Docker Compose file
-      template:
-        src: templates/docker-compose.yml.j2
-        dest: "/var/www/{{ domain }}/docker-compose.yml"
-      when: enable_docker | bool
+    - name: Install Docker Engine (docker-ce) and Docker Compose V2 plugin
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin # Provides 'docker compose' (V2)
+        state: present
+        update_cache: yes # Update cache again after adding repo
+      tags: ['docker', 'install', 'system']
+      notify: Ensure Docker service is started
 
-    - name: Start Docker containers
-      shell: docker-compose up -d
-      args:
-        chdir: "/var/www/{{ domain }}"
-      when: enable_docker | bool
+    # The task for installing 'docker-compose' (V1) is removed as we are using V2 via the plugin.
+
+    - name: "Ensure Docker project directory exists: {{ docker_compose_project_dir }}"
+      ansible.builtin.file:
+        path: "{{ docker_compose_project_dir }}"
+        state: directory
+        owner: "{{ domain_config.linux_username | default(GLOBAL_LINUX_USERNAME | default('ubuntu')) }}" # User who will manage this dir
+        group: "{{ domain_config.linux_username | default(GLOBAL_LINUX_USERNAME | default('ubuntu')) }}"
+        mode: '0755'
+      tags: ['docker', 'filesystem', 'domain_specific']
+
+    - name: "Create Docker Compose file for {{ app_domain }} from template"
+      ansible.builtin.template:
+        src: "templates/docker-compose.yml.j2" # This template uses variables like mysql_db_user, etc.
+        dest: "{{ docker_compose_file_path }}"
+        owner: "{{ domain_config.linux_username | default(GLOBAL_LINUX_USERNAME | default('ubuntu')) }}"
+        group: "{{ domain_config.linux_username | default(GLOBAL_LINUX_USERNAME | default('ubuntu')) }}"
+        mode: '0644'
+      tags: ['docker', 'compose_file', 'domain_specific']
+      # CRITICAL NOTE: The templates/docker-compose.yml.j2 needs to be reviewed and potentially made
+      # more generic or platform-specific. It currently hardcodes a WordPress and MySQL service.
+      # It also hardcodes port "80:80" which will cause conflicts if multiple Dockerized sites are run.
+      # Each site would need a unique host port and a reverse proxy (e.g., main Nginx) to route traffic.
+
+    - name: "Start Docker containers for {{ app_domain }} using Docker Compose V2"
+      ansible.builtin.command:
+        cmd: "docker compose up -d --remove-orphans" # Using V2 syntax: 'docker compose'
+        chdir: "{{ docker_compose_project_dir }}"
+      register: docker_compose_up_result
+      changed_when: "'Creating' in docker_compose_up_result.stdout or 'Recreating' in docker_compose_up_result.stdout or 'Starting' in docker_compose_up_result.stdout or 'running' in docker_compose_up_result.stdout" # Added 'running' for cases where containers are already there and just started.
+      tags: ['docker', 'run', 'domain_specific']
+
+    - name: Display Docker Compose execution results
+      ansible.builtin.debug:
+        var: docker_compose_up_result.stdout_lines
+      when: docker_compose_up_result.stdout_lines is defined
+      tags: ['docker', 'run', 'debug']
+
+  handlers:
+    - name: Ensure Docker service is started
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: yes
+      listen: "Ensure Docker service is started"

@@ -1,14 +1,91 @@
+# 21-staging.yml
 - hosts: all
   become: true
-  tasks:
-    - name: Create staging directory
-      file:
-        path: "/var/www/{{ staging_subdomain }}.{{ domain }}/html"
-        state: directory
-        owner: www-data
-        group: www-data
-      when: enable_staging | bool
+  vars:
+    # Determine if staging environment setup is enabled
+    effective_enable_staging: "{{ domain_config.enable_staging | default(GLOBAL_ENABLE_STAGING_POLICY | default(false)) }}"
 
-    - name: Copy main site to staging
-      shell: cp -r /var/www/{{ domain }}/html/* /var/www/{{ staging_subdomain }}.{{ domain }}/html/
-      when: enable_staging | bool
+    # Staging subdomain prefix
+    effective_staging_subdomain_prefix: "{{ domain_config.staging_subdomain | default(GLOBAL_STAGING_DEFAULT_SUBDOMAIN_PREFIX | default('staging')) }}"
+
+    # Main domain and paths
+    _app_domain: "{{ domain_config.domain }}"
+    _live_webroot: "/var/www/{{ _app_domain }}/html"
+
+    # Staging domain and paths
+    _staging_full_domain: "{{ effective_staging_subdomain_prefix }}.{{ _app_domain }}"
+    _staging_webroot: "/var/www/{{ _staging_full_domain }}/html"
+
+    # User/group for web files
+    # Assuming www-data as the web server user. This could be made configurable via global/domain vars.
+    _web_user: "{{ domain_config.linux_username | default(GLOBAL_LINUX_USERNAME | default('www-data')) }}"
+    _web_group: "{{ domain_config.linux_group | default(GLOBAL_LINUX_GROUP | default('www-data')) }}"
+
+  # This entire playbook should only run if staging is enabled and domain is defined.
+  when:
+    - domain_config is defined
+    - domain_config.domain is defined
+    - effective_enable_staging | bool
+
+  tasks:
+    - name: "Notify: Staging setup for {{ _app_domain }}"
+      ansible.builtin.debug:
+        msg: |
+          Attempting to set up a basic staging environment for '{{ _app_domain }}'
+          Live webroot: {{ _live_webroot }}
+          Staging webroot: {{ _staging_webroot }}
+          Staging domain will be: {{ _staging_full_domain }}
+          
+          IMPORTANT: This playbook currently ONLY copies files.
+          A fully functional staging environment also requires:
+          1. Separate database for staging (copy of live DB).
+          2. Application configuration update for staging (e.g., wp-config.php, .env) to use staging DB & URL.
+          3. For WordPress/Laravel: URL search-replace in the staging database.
+          4. Nginx server block configuration for '{{ _staging_full_domain }}'.
+          These steps are NOT covered by this playbook and need to be handled separately.
+      tags: ['staging', 'info']
+
+    - name: "Create staging webroot directory: {{ _staging_webroot }}"
+      ansible.builtin.file:
+        path: "{{ _staging_webroot }}"
+        state: directory
+        owner: "{{ _web_user }}"
+        group: "{{ _web_group }}"
+        mode: '0755'
+      tags: ['staging', 'filesystem']
+
+    - name: "Synchronize files from live site '{{ _live_webroot }}' to staging '{{ _staging_webroot }}'"
+      ansible.posix.synchronize:
+        src: "{{ _live_webroot }}/" # Trailing slash is important for rsync behavior (copies content of dir)
+        dest: "{{ _staging_webroot }}"
+        archive: yes
+        delete: yes # Delete files in dest that are not in src (makes it a mirror)
+        rsync_opts:
+          - "--exclude=.git" # Example: exclude .git directory
+          # Add other rsync options as needed, e.g., --exclude=wp-config.php if it's handled differently
+      become: true # synchronize often needs to manage permissions, become might be needed depending on user
+      become_user: root # Or a user that can rsync between these paths
+      delegate_to: "{{ inventory_hostname }}" # Ensure rsync runs on the target node from itself to itself
+      tags: ['staging', 'files_sync']
+      # Note: This task copies files. It does not handle database or application configuration for staging.
+
+    - name: "Ensure correct ownership for staging files at {{ _staging_webroot }}"
+      ansible.builtin.file:
+        path: "{{ _staging_webroot }}"
+        owner: "{{ _web_user }}"
+        group: "{{ _web_group }}"
+        recurse: yes
+      tags: ['staging', 'filesystem', 'permissions']
+
+    - name: "Reminder: Staging environment for {{ _staging_full_domain }} requires further manual setup"
+      ansible.builtin.debug:
+        msg: |
+          Basic file copy for staging '{{ _staging_full_domain }}' completed.
+          REMEMBER: This is NOT a fully functional staging site yet.
+          You still need to:
+          1. Set up and populate a separate staging database.
+          2. Update '{{ _staging_webroot }}/wp-config.php' (for WordPress) or '.env' (for Laravel)
+             with staging database credentials and the URL 'https://{{ _staging_full_domain }}'.
+          3. For WordPress: Run 'wp search-replace {{ 'https://' + _app_domain }} https://{{ _staging_full_domain }} --all-tables --allow-root' in the staging DB.
+          4. Configure an Nginx server block for '{{ _staging_full_domain }}' to point to '{{ _staging_webroot }}'.
+      tags: ['staging', 'info', 'post_actions']

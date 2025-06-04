@@ -1,20 +1,60 @@
+# 11-advanced-security.yml
 - hosts: all
   become: true
-  tasks:
-    - name: Install Wordfence plugin
-      shell: wp plugin install wordfence --allow-root
-      args:
-        chdir: "/var/www/{{ domain }}/html"
-      when: enable_advanced_security | bool
+  vars:
+    # Determine if advanced security features are enabled for this run
+    effective_enable_advanced_security: "{{ domain_config.enable_advanced_security | default(GLOBAL_ENABLE_ADVANCED_SECURITY | default(false)) }}"
 
-    - name: Configure CSF for auto-blocking
-      lineinfile:
+    # Domain specific path (for WordPress tasks)
+    wp_domain_path: "/var/www/{{ domain_config.domain }}/html"
+
+  # This entire playbook should only run if advanced security is enabled.
+  when: effective_enable_advanced_security | bool
+
+  tasks:
+    # --- WordPress Specific Advanced Security ---
+    - name: "Install and activate Wordfence plugin for WordPress site: {{ domain_config.domain }}"
+      ansible.builtin.shell:
+        cmd: "wp plugin install wordfence --activate --allow-root"
+      args:
+        chdir: "{{ wp_domain_path }}"
+      # This task should only run if the platform is WordPress AND advanced security is enabled.
+      # The effective_enable_advanced_security is already checked at the play level.
+      when: domain_config.platform == "wordpress"
+      register: wordfence_install_result
+      changed_when: >
+        'already installed' not in wordfence_install_result.stdout and
+        ('activated' in wordfence_install_result.stdout or 'Success: Installed and activated' in wordfence_install_result.stdout)
+      failed_when: >
+        wordfence_install_result.rc != 0 and
+        'already installed and active' not in wordfence_install_result.stdout and
+        'already installed' not in wordfence_install_result.stdout
+      tags: ['security', 'wordpress', 'plugin', 'wordfence', 'domain_specific']
+      # Note: Further configuration of Wordfence (e.g., setup wizard, firewall optimization) is not handled here.
+
+    # --- System-Wide Advanced Security (CSF Configuration) ---
+    # This task applies a system-wide CSF setting.
+    # It runs if 'effective_enable_advanced_security' is true for the current domain context.
+    # If multiple domains are processed and this flag is true for any, this task will run
+    # (but lineinfile is idempotent).
+    - name: "Configure CSF for auto-blocking (set LF_TRIGGER to '5')"
+      ansible.builtin.lineinfile:
         path: /etc/csf/csf.conf
-        regexp: '^LF_TRIGGER ='
-        line: 'LF_TRIGGER = "5"'
-      when: enable_advanced_security | bool
-      notify: Restart CSF
+        regexp: '^LF_TRIGGER\s*=' # Matches LF_TRIGGER with optional space around =
+        line: 'LF_TRIGGER = "5"' # Sets login failure trigger count
+        owner: root
+        group: root
+        mode: '0600' # CSF conf file is typically root-only
+      notify: Restart CSF service
+      tags: ['security', 'firewall', 'csf', 'system']
+      # This assumes CSF is already installed (e.g., by 02-install-nginx.yml or another playbook).
+      # Also assumes that if this playbook is run, CSF management is desired.
 
   handlers:
-    - name: Restart CSF
-      shell: csf -r
+    - name: Restart CSF service
+      ansible.builtin.shell:
+        cmd: "csf -r"
+      listen: "Restart CSF service"
+      # The handler will only run if a task that notifies it has changed and run.
+      # The notifying task itself is conditional on 'effective_enable_advanced_security'.
+      tags: ['security', 'firewall', 'csf', 'system']

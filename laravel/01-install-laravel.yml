@@ -1,68 +1,103 @@
----
 # laravel/01-install-laravel.yml
 - hosts: all
   become: true
+  # This playbook is specific to Laravel and should only run if the platform is Laravel
+  # and domain_config is properly defined.
+  when:
+    - domain_config is defined
+    - domain_config.platform is defined and domain_config.platform == "laravel"
+  vars:
+    # Define effective variables for this playbook run
+    _app_domain: "{{ domain_config.domain }}"
+    _laravel_webroot: "/var/www/{{ _app_domain }}/html"
+    _laravel_log_path: "/var/www/{{ _app_domain }}/logs" # Main log directory, not storage/logs
+
+    # Laravel version with fallback to a global default, then a hardcoded default
+    effective_laravel_version: "{{ domain_config.laravel_version | default(GLOBAL_LARAVEL_DEFAULT_VERSION | default('10.*')) }}"
+
+    # Web server user and group (typically www-data for Debian/Ubuntu)
+    # These are hardcoded in tasks as www-data, which is common.
+    # If they need to be configurable, use:
+    # _web_user: "{{ domain_config.web_user | default(GLOBAL_WEB_USER | default('www-data')) }}"
+    # _web_group: "{{ domain_config.web_group | default(GLOBAL_WEB_GROUP | default('www-data')) }}"
+    _web_user: "www-data"
+    _web_group: "www-data"
+
+    # List of required variables from domain_config for Laravel setup
+    required_laravel_vars:
+      - domain
+      - laravel_app_name
+      - laravel_app_env
+      # - laravel_admin_email # Used in 02-configure, not strictly required for install itself
+      - mysql_db_name
+      - mysql_db_user
+      - mysql_db_password
+      - php_version # Used by Nginx config in the next playbook
+
   tasks:
-    - name: Ensure required variables are defined
-      fail:
-        msg: "Required variable '{{ item }}' is not defined."
-      when: domain_config[item] is not defined
-      loop:
-        - domain
-        - laravel_app_name
-        - laravel_app_env
-        - laravel_admin_email
-        - mysql_db_name
-        - mysql_db_user
-        - mysql_db_password
-        - php_version
-    
-    - name: Create Laravel directory
-      file:
-        path: "/var/www/{{ domain_config.domain }}/html"
+    - name: "Ensure required Laravel variables are defined for domain: {{ _app_domain }}"
+      ansible.builtin.fail:
+        msg: "Required variable 'domain_config.{{ item }}' is not defined for Laravel setup of {{ _app_domain }}."
+      when: domain_config[item] is not defined or (domain_config[item] is string and domain_config[item] | length == 0)
+      loop: "{{ required_laravel_vars }}"
+      tags: ['laravel', 'install', 'prerequisites', 'validation']
+
+    - name: "Create Laravel project root directory: {{ _laravel_webroot }}"
+      ansible.builtin.file:
+        path: "{{ _laravel_webroot }}"
         state: directory
-        owner: www-data
-        group: www-data
+        owner: "{{ _web_user }}"
+        group: "{{ _web_group }}"
         mode: '0755'
-    
-    - name: Create Laravel logs directory
-      file:
-        path: "/var/www/{{ domain_config.domain }}/logs"
+      tags: ['laravel', 'install', 'filesystem']
+
+    - name: "Create Laravel main logs directory: {{ _laravel_log_path }}"
+      ansible.builtin.file:
+        path: "{{ _laravel_log_path }}"
         state: directory
-        owner: www-data
-        group: www-data
-        mode: '0755'
-    
-    - name: Install Composer globally
-      shell: curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
-      args:
-        creates: /usr/local/bin/composer
-    
-    - name: Create Laravel project via Composer
-      become: yes
-      become_user: www-data
-      shell: |
-        cd /var/www/{{ domain_config.domain }}/html
-        composer create-project --prefer-dist laravel/laravel . "{{ domain_config.laravel_version|default('10.*') }}"
-      args:
-        creates: "/var/www/{{ domain_config.domain }}/html/artisan"
-    
-    - name: Set proper permissions
-      file:
-        path: "/var/www/{{ domain_config.domain }}/html"
-        owner: www-data
-        group: www-data
-        recurse: yes
-        mode: u=rwX,g=rX,o=rX
-    
-    - name: Set storage and bootstrap/cache directories as writable
-      file:
-        path: "{{ item }}"
-        state: directory
-        owner: www-data
-        group: www-data
+        owner: "{{ _web_user }}" # Or root if Nginx manages its own log file creation with root perms initially
+        group: "{{ _web_group }}" # Or adm group
         mode: '0775'
+      tags: ['laravel', 'install', 'filesystem', 'logging']
+
+    - name: Ensure Composer is installed globally
+      ansible.builtin.shell:
+        cmd: "curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer"
+      args:
+        creates: /usr/local/bin/composer # Makes the task idempotent
+      changed_when: false # Idempotency handled by 'creates'
+      tags: ['laravel', 'install', 'composer', 'system']
+
+    - name: "Create Laravel project in {{ _laravel_webroot }} using Composer (version {{ effective_laravel_version }})"
+      ansible.builtin.command: # Using command for more direct composer invocation
+        cmd: "composer create-project --prefer-dist laravel/laravel . \"{{ effective_laravel_version }}\""
+        chdir: "{{ _laravel_webroot }}"
+        creates: "{{ _laravel_webroot }}/artisan" # Idempotency check
+      become: true
+      become_user: "{{ _web_user }}"
+      tags: ['laravel', 'install', 'composer_create_project']
+
+    - name: "Set base permissions for Laravel project files in {{ _laravel_webroot }}"
+      ansible.builtin.file:
+        path: "{{ _laravel_webroot }}"
+        owner: "{{ _web_user }}"
+        group: "{{ _web_group }}"
         recurse: yes
-      with_items:
-        - "/var/www/{{ domain_config.domain }}/html/storage"
-        - "/var/www/{{ domain_config.domain }}/html/bootstrap/cache"
+        # mode: u=rwX,g=rX,o=rX # This is fine, translates to 755 for dirs, 644 for files.
+        # More explicit:
+        # file_mode: '0644'
+        # directory_mode: '0755'
+      tags: ['laravel', 'install', 'permissions']
+
+    - name: "Set writable permissions for Laravel storage and bootstrap/cache directories"
+      ansible.builtin.file:
+        path: "{{ _laravel_webroot }}/{{ item }}"
+        state: directory # Ensure they exist as directories
+        owner: "{{ _web_user }}"
+        group: "{{ _web_group }}"
+        mode: '0775' # rwxrwxr-x, allowing group (web server) to write
+        recurse: yes
+      loop:
+        - storage
+        - bootstrap/cache
+      tags: ['laravel', 'install', 'permissions']
