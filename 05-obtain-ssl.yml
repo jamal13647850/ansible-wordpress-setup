@@ -13,10 +13,6 @@
     # For Certbot to automatically configure Nginx and redirect HTTP to HTTPS
     le_redirect_option: "--redirect" # Can be made conditional: domain_config.letsencrypt_force_redirect | default(true)
     le_nginx_plugin_option: "--nginx"
-
-  # This entire playbook should only run if an SSL email is provided for the domain, indicating SSL is desired.
-  when: domain_config is defined and domain_config.domain is defined and effective_ssl_email | length > 0
-
   tasks:
     - name: Install Certbot and its Nginx plugin
       ansible.builtin.apt:

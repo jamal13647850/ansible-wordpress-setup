@@ -12,8 +12,6 @@
     wp_domain_path: "/var/www/{{ domain_config.domain }}/html"
     wp_config_file_path: "{{ wp_domain_path }}/wp-config.php"
 
-  # This entire playbook should only run if advanced caching is enabled.
-  when: effective_enable_advanced_caching | bool
 
   tasks:
     - name: "Install Memcached service (if cache type is 'memcached')"

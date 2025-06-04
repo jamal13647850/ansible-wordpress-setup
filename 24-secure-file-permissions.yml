@@ -14,11 +14,6 @@
     _web_user: "{{ domain_config.linux_username | default(GLOBAL_LINUX_USERNAME | default('www-data')) }}" # Assuming this var from domain_config is the web user
     _web_group: "{{ domain_config.linux_group | default(GLOBAL_LINUX_GROUP | default('www-data')) }}"   # Assuming this var from domain_config is the web group
 
-  # This entire playbook should only run if secure_file_permissions is enabled and domain_config is defined.
-  when:
-    - domain_config is defined
-    - domain_config.domain is defined
-    - effective_secure_file_permissions | bool
 
   tasks:
     - name: "Ensure webroot directory exists for {{ _app_domain }} before setting permissions"

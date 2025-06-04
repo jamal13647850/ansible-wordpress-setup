@@ -48,11 +48,6 @@
         }
       }
 
-  # This playbook is for WordPress and only runs if SMTP is enabled for the domain (or globally)
-  when:
-    - domain_config is defined
-    - domain_config.platform is defined and domain_config.platform == "wordpress"
-    - effective_enable_smtp | bool
 
   tasks:
     - name: "Install and activate WP Mail SMTP plugin for {{ domain_config.domain }}"

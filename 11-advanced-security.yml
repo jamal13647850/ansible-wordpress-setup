@@ -8,8 +8,6 @@
     # Domain specific path (for WordPress tasks)
     wp_domain_path: "/var/www/{{ domain_config.domain }}/html"
 
-  # This entire playbook should only run if advanced security is enabled.
-  when: effective_enable_advanced_security | bool
 
   tasks:
     # --- WordPress Specific Advanced Security ---

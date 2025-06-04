@@ -26,9 +26,6 @@
     # Add others like CREATE TEMPORARY TABLES, EXECUTE if specifically needed by the app. Avoid broad grants like ALTER, DROP, CREATE.
     secure_app_user_privs: "SELECT,INSERT,UPDATE,DELETE,INDEX,REFERENCES,TRIGGER" # More restrictive than ALL
 
-  # This entire playbook should only run if the secure database policy is enabled.
-  when: effective_secure_database_policy | bool
-
   tasks:
     - name: "Ensure application user '{{ _app_db_user }}' has secure (limited) privileges on database '{{ _app_db_name }}'"
       community.mysql.mysql_user:

@@ -4,7 +4,6 @@
   # This entire playbook should only run if the platform for the current domain is WordPress.
   # This check is primarily for safety if the playbook is ever run directly.
   # run_playbooks.sh already ensures this by selecting playbooks based on platform.
-  when: domain_config is defined and domain_config.platform is defined and domain_config.platform == "wordpress"
   vars:
     # Define effective variables for this playbook run, using domain_config with fallbacks
     wp_domain: "{{ domain_config.domain }}"

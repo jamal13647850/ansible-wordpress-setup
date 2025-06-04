@@ -19,9 +19,6 @@
     _app_domain_slug: "{{ domain_config.domain | replace('.', '_') | replace('-', '_') }}"
     _wp_access_log_path: "/var/www/{{ domain_config.domain }}/logs/access.log" # Standard access log path
 
-  # This entire playbook should only run if Fail2ban is enabled.
-  when: effective_fail2ban_enabled | bool
-
   tasks:
     - name: Install Fail2ban package
       ansible.builtin.apt:

@@ -18,8 +18,6 @@
     # laravel_files_to_remove:
     #   - "server.php" # If deploying to Nginx/Apache and not using 'php artisan serve'
 
-  # This entire playbook should only run if anti-hack measures are enabled.
-  when: effective_enable_anti_hack | bool
 
   tasks:
     - name: "Remove unnecessary/informational files for WordPress site: {{ domain_config.domain }}"
