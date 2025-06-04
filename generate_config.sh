@@ -186,32 +186,33 @@ security_settings() {
 
 # Performance Settings
 performance_settings() {
-    common_options="php_opcache\" \"PHP OPcache\" off \
-           \"redis\" \"Redis caching\" off \
-           \"browser_caching\" \"Browser caching\" off \
+    common_options="\"php_opcache\" \"PHP OPcache\" off \\
+           \"redis\" \"Redis caching\" off \\
+           \"browser_caching\" \"Browser caching\" off \\
            \"db_optimization\" \"Database optimization\" off"
     
     if [ "$PLATFORM" == "wordpress" ]; then
         dialog --title "Performance Settings" --checklist "Select performance options:" 20 60 12 \
-           "$common_options" \
-           \"advanced_caching\" \"Advanced caching (e.g., Memcached)\" off \
-           \"cdn\" \"CDN (e.g., Cloudflare)\" off \
-           \"local_cdn\" \"Local CDN (e.g., ArvanCloud)\" off \
-           \"lazy_loading\" \"Lazy loading\" off \
-           \"quic_http3\" \"QUIC/HTTP3\" off \
-           \"dynamic_caching\" \"Dynamic caching (e.g., Varnish)\" off \
-           \"performance_report\" \"Performance report\" off 2>"$TEMP_FILE"
+           $common_options \
+           "advanced_caching" "Advanced caching (e.g., Memcached)" off \
+           "cdn" "CDN (e.g., Cloudflare)" off \
+           "local_cdn" "Local CDN (e.g., ArvanCloud)" off \
+           "lazy_loading" "Lazy loading" off \
+           "quic_http3" "QUIC/HTTP3" off \
+           "dynamic_caching" "Dynamic caching (e.g., Varnish)" off \
+           "performance_report" "Performance report" off 2>"$TEMP_FILE"
     else
         dialog --title "Performance Settings" --checklist "Select performance options:" 20 60 12 \
-           "$common_options" \
-           \"queue\" \"Queue system\" off \
-           \"horizon\" \"Laravel Horizon\" off \
-           \"cdn\" \"CDN (e.g., Cloudflare)\" off \
-           \"local_cdn\" \"Local CDN (e.g., ArvanCloud)\" off \
-           \"octane\" \"Laravel Octane\" off \
-           \"telescope\" \"Laravel Telescope\" off \
-           \"performance_report\" \"Performance report\" off 2>"$TEMP_FILE"
+           $common_options \
+           "queue" "Queue system" off \
+           "horizon" "Laravel Horizon" off \
+           "cdn" "CDN (e.g., Cloudflare)" off \
+           "local_cdn" "Local CDN (e.g., ArvanCloud)" off \
+           "octane" "Laravel Octane" off \
+           "telescope" "Laravel Telescope" off \
+           "performance_report" "Performance report" off 2>"$TEMP_FILE"
     fi
+
     
     PERFORMANCE_OPTIONS=$(cat "$TEMP_FILE")
     

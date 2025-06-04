@@ -1,4 +1,4 @@
-- hosts: wordpress
+- hosts: all
   become: true
   tasks:
     - name: Install MySQL Python modules

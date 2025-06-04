@@ -72,7 +72,7 @@ run_playbook() {
     print_message "blue" "Running $description..."
     
     # Run the playbook with ansible-playbook
-    ansible-playbook "$playbook" -v | tee -a "$MAIN_LOG_FILE"
+    ansible-playbook -i inventory "$playbook" -v | tee -a "$MAIN_LOG_FILE"
     
     local exit_code=${PIPESTATUS[0]}
     if [ $exit_code -eq 0 ]; then
