@@ -2,35 +2,22 @@
 - hosts: all
   become: true
   vars:
-    # effective_mysql_root_password: "{{ domain_config.mysql_root_password | default(GLOBAL_MYSQL_ROOT_PASSWORD | default('ChangemeRootPasswordPlease')) }}" # [cite: 652]
-    # A generate_config.sh atualizado deve garantir que GLOBAL_MYSQL_ROOT_PASSWORD ou domain_config.mysql_root_password esteja definido.
-    # Se não, o playbook falhará ou usará um valor inseguro.
-    # Vamos assumir que domain_config.mysql_root_password é preenchido por generate_config.sh se o global não estiver.
-    # Ou que o global SEMPRE é definido.
-    # Para segurança, é crucial que esta senha seja forte e definida.
     _effective_mysql_root_password: "{{ domain_config.mysql_root_password | default(GLOBAL_MYSQL_ROOT_PASSWORD | default(omit)) }}"
-
-
-    app_db_name: "{{ domain_config.mysql_db_name }}" # [cite: 652]
-    app_db_user: "{{ domain_config.mysql_db_user }}" # [cite: 652]
-    app_db_password: "{{ domain_config.mysql_db_password }}" # [cite: 652]
-
-    # Privilégios mais restritos para o usuário da aplicação
-    # Estes são geralmente suficientes para a maioria das aplicações web (WordPress, Laravel)
-    # incluindo instalação, migrations, e operações CRUD.
+    app_db_name: "{{ domain_config.mysql_db_name if domain_config is defined and domain_config.mysql_db_name is defined else omit }}"
+    app_db_user: "{{ domain_config.mysql_db_user if domain_config is defined and domain_config.mysql_db_user is defined else omit }}"
+    app_db_password: "{{ domain_config.mysql_db_password if domain_config is defined and domain_config.mysql_db_password is defined else omit }}"
     app_user_privileges: "SELECT,INSERT,UPDATE,DELETE,CREATE,ALTER,DROP,INDEX,REFERENCES,CREATE TEMPORARY TABLES,LOCK TABLES,TRIGGER"
 
   tasks:
     - name: "Fail if MySQL root password is not properly set"
       ansible.builtin.fail:
-        msg: "MySQL root password (domain_config.mysql_root_password or GLOBAL_MYSQL_ROOT_PASSWORD) is not defined. Please set it in group_vars/all.yml or ensure generate_config.sh sets it."
-      when: _effective_mysql_root_password is ansible.builtin.omit
+        msg: |
+          MySQL root password is not defined.
+      when: _effective_mysql_root_password is not defined or (_effective_mysql_root_password | length == 0)
 
     - name: "Install MySQL Python interface modules (pymysql is preferred)"
       ansible.builtin.apt:
-        name:
-          # - python3-mysqldb # Pode causar problemas com ansible_user=root e auth_socket. Pymysql é mais flexível.
-          - python3-pymysql
+        name: python3-pymysql
         state: present
         update_cache: yes
       tags: ['mysql', 'deps']
@@ -39,25 +26,43 @@
       ansible.builtin.apt:
         name: mysql-server
         state: present
-      tags: ['mysql', 'install'] # [cite: 653]
+      tags: ['mysql', 'install']
 
     - name: "Ensure MySQL service is started and enabled"
       ansible.builtin.systemd:
-        name: mysql # O nome do serviço pode variar (ex: mysqld), mas 'mysql' é comum no Debian/Ubuntu
+        name: mysql
         state: started
         enabled: yes
       tags: ['mysql', 'service']
 
-    - name: "Set/Update MySQL root password"
+    - name: "Try connect as root via UNIX socket (no password)"
+      community.mysql.mysql_info:
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+      register: mysql_root_socket_test
+      ignore_errors: true
+
+    - name: "Set/Update MySQL root password (via unix_socket — first install)"
       community.mysql.mysql_user:
-        login_unix_socket: /var/run/mysqld/mysqld.sock # Usar socket para o primeiro setup do root é mais seguro
+        login_unix_socket: /var/run/mysqld/mysqld.sock
         name: root
         password: "{{ _effective_mysql_root_password }}"
         host: localhost
         state: present
-        # check_implicit_admin: true # Garante que o usuário root tenha privilégios de admin
-      no_log: true # Não logar a senha
-      tags: ['mysql', 'config', 'security'] # [cite: 654]
+      when: mysql_root_socket_test is succeeded
+      no_log: true
+      tags: ['mysql', 'config', 'security']
+
+    - name: "Set/Update MySQL root password (via password — re-run or after first time)"
+      community.mysql.mysql_user:
+        login_user: root
+        login_password: "{{ _effective_mysql_root_password }}"
+        name: root
+        password: "{{ _effective_mysql_root_password }}"
+        host: localhost
+        state: present
+      when: mysql_root_socket_test is failed
+      no_log: true
+      tags: ['mysql', 'config', 'security']
 
     - name: "Create the application database for domain {{ domain_config.domain }}"
       community.mysql.mysql_db:
@@ -66,29 +71,29 @@
         name: "{{ app_db_name }}"
         state: present
       no_log: true
-      tags: ['mysql', 'db_setup'] # [cite: 655]
+      tags: ['mysql', 'db_setup']
+      when: domain_config is defined
 
-    - name: "Create the application database user for {{ domain_config.domain }} with limited privileges"
+    - name: "Create the application user — {{ app_db_user }} — with limited privileges"
       community.mysql.mysql_user:
         login_user: root
         login_password: "{{ _effective_mysql_root_password }}"
         name: "{{ app_db_user }}"
         password: "{{ app_db_password }}"
-        priv: "{{ app_db_name }}.*:{{ app_user_privileges }}" # Aplicando privilégios restritos [cite: 656]
-        host: "localhost" # Restringir ao host local por padrão
+        priv: "{{ app_db_name }}.*:{{ app_user_privileges }}"
+        host: "localhost"
         state: present
       no_log: true
       tags: ['mysql', 'db_user_setup']
+      when: domain_config is defined
 
     - name: "Display MySQL version (for informational purposes)"
       ansible.builtin.command: "mysql --version"
       register: mysql_version_output
       changed_when: false
-      check_mode: false # Executar mesmo em check_mode para obter a informação
-      tags: ['mysql', 'info']
+      check_mode: false
 
     - name: "Print MySQL version (if verbosity is high)"
       ansible.builtin.debug:
         msg: "MySQL Server Version: {{ mysql_version_output.stdout }}"
       when: ansible_verbosity > 1
-      tags: ['mysql', 'info'] # [cite: 657]

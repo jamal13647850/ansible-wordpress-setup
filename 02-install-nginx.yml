@@ -1,35 +1,45 @@
-# 02-install-nginx.yml
 - hosts: all
   become: true
   vars:
-    # Define effective variables using domain_config with fallbacks to potential globals
-    # These globals would need to be defined in group_vars/all.yml for the fallback to work.
-    # generate_config.sh currently puts these under each domain, so domain_config.variable will likely exist.
     nginx_domain: "{{ domain_config.domain }}"
-    nginx_php_version: "{{ domain_config.php_version | default(GLOBAL_DEFAULT_PHP_VERSION | default('8.2')) }}" # Assuming a global default PHP
+    nginx_php_version: "{{ domain_config.php_version | default(GLOBAL_DEFAULT_PHP_VERSION | default('8.2')) }}"
     nginx_enable_basic_auth: "{{ domain_config.enable_basic_auth | default(false) }}"
     nginx_basic_auth_user: "{{ domain_config.basic_auth_user | default('') }}"
     nginx_basic_auth_password: "{{ domain_config.basic_auth_password | default('') }}"
+    nginx_arch: "amd64"  # فرض می‌شود معماری amd64 باشد؛ اگر سرور شما arm است مقدار را اصلاح کنید.
+    nginx_apt_codename: "{{ 'jammy' if ansible_distribution_release == 'noble' else ansible_distribution_release }}"
+      # برای Ubuntu Noble فعلاً jammy استفاده می‌شود تا nginx.org پشتیبانی کند.
 
   tasks:
-    - name: Add Nginx GPG key to trusted.gpg.d
+    - name: Ensure /etc/apt/keyrings exists (required for Ubuntu 22.04+/Noble)
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      tags: ['nginx', 'repo']
+
+    - name: Download Nginx GPG key (apt keyring, .gpg)
       ansible.builtin.get_url:
         url: https://nginx.org/keys/nginx_signing.key
-        dest: /etc/apt/trusted.gpg.d/nginx_signing.gpg
+        dest: /etc/apt/keyrings/nginx-signing.gpg
         mode: '0644'
-      tags: ['nginx', 'repo', ' prerequisites']
+        force: true
+      tags: ['nginx', 'repo']
 
-    - name: Add Nginx official repository
+    - name: Add Nginx official repository with signed-by (apt 2+ and Ubuntu Jammy/Noble)
       ansible.builtin.apt_repository:
-        repo: "deb http://nginx.org/packages/{{ ansible_distribution | lower }} {{ ansible_distribution_release }} nginx"
+        repo: "deb [arch={{ nginx_arch }} signed-by=/etc/apt/keyrings/nginx-signing.gpg] http://nginx.org/packages/ubuntu {{ nginx_apt_codename }} nginx"
         state: present
+        filename: nginx
         update_cache: yes
       tags: ['nginx', 'repo']
 
     - name: Install Nginx
       ansible.builtin.apt:
         name: nginx
-        state: latest # Ensures the latest version from the added repository
+        state: latest
         update_cache: yes
       tags: ['nginx', 'install']
 
@@ -38,16 +48,15 @@
         wget -qO- https://download.configserver.com/csf.tgz | tar -xzf -
         cd csf && sh install.sh
       args:
-        creates: /etc/csf/csf.conf # Makes the task idempotent
-        chdir: /tmp # Perform download and extraction in /tmp
+        creates: /etc/csf/csf.conf
+        chdir: /tmp
       tags: ['firewall', 'csf', 'security', 'system']
-      # Consider making CSF installation its own playbook or role if more configuration is needed.
 
     - name: Ensure Nginx runs as www-data user
       ansible.builtin.lineinfile:
         path: /etc/nginx/nginx.conf
         regexp: '^user\s+.*;'
-        line: 'user www-data;' # Common user for web servers on Debian/Ubuntu
+        line: 'user www-data;'
         state: present
       notify: Restart Nginx
       tags: ['nginx', 'config']
@@ -76,18 +85,17 @@
         owner: root
         group: root
       loop:
-        # Note: These templates will be reviewed/modified later to use domain_config
         - { src: 'templates/arvancloud-ip-sync.sh.j2', dest: 'arvancloud-ip-sync.sh', mode: '0755' }
         - { src: 'templates/cache.j2', dest: 'cache.conf' }
         - { src: 'templates/cloudflare-ip-sync.sh.j2', dest: 'cloudflare-ip-sync.sh', mode: '0755' }
         - { src: 'templates/cloudflare.j2', dest: 'cloudflare.conf' }
-        - { src: 'templates/filemanager.j2', dest: 'filemanager.conf' } # Uses php_version, enable_basic_auth etc.
+        - { src: 'templates/filemanager.j2', dest: 'filemanager.conf' }
         - { src: 'templates/general.j2', dest: 'general.conf' }
         - { src: 'templates/gzip.j2', dest: 'gzip.conf' }
         - { src: 'templates/keepalive.j2', dest: 'keepalive.conf' }
-        - { src: 'templates/redirects.j2', dest: 'redirects.conf' } # Uses domain
+        - { src: 'templates/redirects.j2', dest: 'redirects.conf' }
         - { src: 'templates/securityheaders.j2', dest: 'securityheaders.conf' }
-        - { src: 'templates/wordpress.j2', dest: 'wordpress.conf' } # Uses php_version, basic_auth etc.
+        - { src: 'templates/wordpress.j2', dest: 'wordpress.conf' }
       notify: Restart Nginx
       tags: ['nginx', 'config', 'domain_specific']
 
@@ -99,13 +107,13 @@
       tags: ['nginx', 'utils', 'prerequisites']
 
     - name: Create .htpasswd file for Basic Authentication on {{ nginx_domain }}
-      community.general.htpasswd: # Or ansible.builtin.htpasswd if available and preferred
+      community.general.htpasswd:
         path: "/etc/nginx/sites-available/{{ nginx_domain }}helper/.htpasswd"
         name: "{{ nginx_basic_auth_user }}"
         password: "{{ nginx_basic_auth_password }}"
-        owner: www-data # Nginx worker process user should be able to read this
-        group: root     # Or www-data, but root with 0640 is also common
-        mode: '0640'    # Readable by owner and group
+        owner: www-data
+        group: root
+        mode: '0640'
         state: present
       when: nginx_enable_basic_auth | bool and nginx_basic_auth_user and nginx_basic_auth_password
       notify: Restart Nginx
@@ -114,15 +122,15 @@
     - name: Run Cloudflare IP sync script for {{ nginx_domain }} (if script exists)
       ansible.builtin.command: "/etc/nginx/sites-available/{{ nginx_domain }}helper/cloudflare-ip-sync.sh /etc/nginx/sites-available/{{ nginx_domain }}helper/cloudflare.conf"
       args:
-        creates: "/etc/nginx/sites-available/{{ nginx_domain }}helper/cloudflare.conf" # Idempotency based on output file
-      changed_when: false # The script itself should indicate change or be idempotent
+        creates: "/etc/nginx/sites-available/{{ nginx_domain }}helper/cloudflare.conf"
+      changed_when: false
       when: "lookup('file', '/etc/nginx/sites-available/{{ nginx_domain }}helper/cloudflare-ip-sync.sh', errors='ignore') is file"
       tags: ['nginx', 'cdn_sync', 'domain_specific']
 
     - name: Run ArvanCloud IP sync script for {{ nginx_domain }} (if script exists)
       ansible.builtin.command: "/etc/nginx/sites-available/{{ nginx_domain }}helper/arvancloud-ip-sync.sh /etc/nginx/sites-available/{{ nginx_domain }}helper/arvancloud.conf"
       args:
-        creates: "/etc/nginx/sites-available/{{ nginx_domain }}helper/arvancloud.conf" # Idempotency
+        creates: "/etc/nginx/sites-available/{{ nginx_domain }}helper/arvancloud.conf"
       changed_when: false
       when: "lookup('file', '/etc/nginx/sites-available/{{ nginx_domain }}helper/arvancloud-ip-sync.sh', errors='ignore') is file"
       tags: ['nginx', 'cdn_sync', 'domain_specific']
@@ -132,30 +140,28 @@
         path: "/var/www/{{ nginx_domain }}/logs"
         state: directory
         owner: www-data
-        group: www-data # Or adm group for logs
-        mode: '0775' # Writable by www-data, readable by group
+        group: www-data
+        mode: '0775'
       tags: ['nginx', 'config', 'logging', 'domain_specific']
 
     - name: Create Nginx cache directory for domain {{ nginx_domain }}
       ansible.builtin.file:
         path: "/etc/nginx/cache/{{ nginx_domain }}"
         state: directory
-        owner: www-data # Nginx worker process needs to write here
+        owner: www-data
         group: www-data
         mode: '0755'
       tags: ['nginx', 'config', 'cache', 'domain_specific']
 
     - name: Copy main Nginx site configuration for {{ nginx_domain }}
       ansible.builtin.template:
-        src: "templates/nginx.conf.j2" # CRITICAL: This template needs to be refactored for single domain_config
+        src: "templates/nginx.conf.j2"
         dest: "/etc/nginx/sites-available/{{ nginx_domain }}.conf"
         mode: '0644'
         owner: root
         group: root
       notify: Restart Nginx
       tags: ['nginx', 'config', 'site_config', 'domain_specific']
-      # This task assumes nginx.conf.j2 will be modified to take domain_config
-      # and generate config for ONE domain, not loop through 'domains.items()'.
 
     - name: Enable Nginx site for {{ nginx_domain }}
       ansible.builtin.file:
@@ -169,6 +175,6 @@
 
   handlers:
     - name: Restart Nginx
-      ansible.builtin.service:
+      ansible.builtin.systemd:
         name: nginx
         state: restarted
