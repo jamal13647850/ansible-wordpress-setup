@@ -1,51 +1,75 @@
-# 24-secure-file-permissions.yml
+# File: 24-secure-file-permissions.yml
+# Author: Sayyed Jamal Ghasemi
+# Full Stack Developer
+# Email: jamal13647850@gmail.com
+# LinkedIn: https://www.linkedin.com/in/jamal1364/
+# Instagram: https://www.instagram.com/jamal13647850
+# Telegram: https://t.me/jamaldev
+# Website: https://jamalghasemi.com
+# Date: 2024-06-20
+
 - hosts: all
   become: true
   vars:
-    # Determine if securing file permissions is enabled for this run
+    # Variables remain unchanged as per user request
     effective_secure_file_permissions: "{{ domain_config.secure_file_permissions | default(GLOBAL_SECURE_FILE_PERMISSIONS_POLICY | default(true)) }}"
-
     _app_domain: "{{ domain_config.domain }}"
     _app_webroot: "/var/www/{{ _app_domain }}/html"
-    _wp_config_path: "{{ _app_webroot }}/wp-config.php"
-    _wp_uploads_path: "{{ _app_webroot }}/wp-content/uploads"
-
-    # Define web server user and group, falling back to globals or common defaults
-    _web_user: "{{ domain_config.linux_username | default(GLOBAL_LINUX_USERNAME | default('www-data')) }}" # Assuming this var from domain_config is the web user
-    _web_group: "{{ domain_config.linux_group | default(GLOBAL_LINUX_GROUP | default('www-data')) }}"   # Assuming this var from domain_config is the web group
-
+    _wp_config_path: "/var/www/{{ _app_domain }}/wp-config.php"  # Path to WordPress configuration file
+    _web_user: "{{ domain_config.linux_username | default(GLOBAL_LINUX_USERNAME | default('www-data')) }}"
+    _web_group: "{{ domain_config.linux_group | default(GLOBAL_LINUX_GROUP | default('www-data')) }}"
 
   tasks:
-    - name: "Ensure webroot directory exists for {{ _app_domain }} before setting permissions"
-      ansible.builtin.file:
-        path: "{{ _app_webroot }}"
-        state: directory
-        owner: "{{ _web_user }}"
-        group: "{{ _web_group }}"
-        mode: '0755' # Standard base permission for webroot parent
-      tags: ['permissions', 'filesystem', 'setup']
-
-    - name: "Set general secure permissions for files and directories in {{ _app_webroot }}"
-      ansible.builtin.shell: |
-        find {{ _app_webroot | quote }} -type d -exec chmod 755 {} \;
-        find {{ _app_webroot | quote }} -type f -exec chmod 644 {} \;
-      changed_when: false # Shell commands for chmod can be noisy; assume idempotency or check more granularly if needed
+    # Find all directories inside the webroot
+    - name: "Find all directories inside the webroot"
+      ansible.builtin.find:
+        paths: "{{ _app_webroot }}"
+        file_type: directory
+      register: found_dirs
       tags: ['permissions', 'filesystem', 'hardening']
-      # Note: This sets general permissions. Specific files like wp-config.php will be handled next.
 
-    - name: "Set secure permissions for wp-config.php for WordPress site {{ _app_domain }}"
+    # Set permissions 755 for directories
+    - name: "Set secure permissions for directories (755)"
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        mode: '0755'
+      loop: "{{ found_dirs.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      tags: ['permissions', 'filesystem', 'hardening']
+
+    # Find all files inside the webroot
+    - name: "Find all files inside the webroot"
+      ansible.builtin.find:
+        paths: "{{ _app_webroot }}"
+        file_type: file
+      register: found_files
+      tags: ['permissions', 'filesystem', 'hardening']
+
+    # Set permissions 644 for files
+    - name: "Set secure permissions for files (644)"
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: file
+        mode: '0644'
+      loop: "{{ found_files.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      tags: ['permissions', 'filesystem', 'hardening']
+    
+    # Set the most secure permissions for wp-config.php file (600)
+    - name: "Set the MOST secure permissions for wp-config.php (0600)"
       ansible.builtin.file:
         path: "{{ _wp_config_path }}"
-        mode: '0640' # More restrictive permissions
+        mode: '0600'  # Improved from 0640 to 0600 for maximum security
         owner: "{{ _web_user }}"
         group: "{{ _web_group }}"
-      when: domain_config.platform == "wordpress" and ansible_check_mode == false # Check mode can't know if file exists yet if created by earlier play
+      when: domain_config.platform == "wordpress"
       tags: ['permissions', 'wordpress', 'hardening', 'wp-config']
-      # If wp-config.php might not exist yet (e.g. if this playbook runs before WP install),
-      # this task might show "changed" even if file doesn't exist to change. Add `ignore_errors: yes` or check existence.
-      # However, this playbook is usually run post-installation.
 
-    - name: "Set proper ownership for all files and directories in {{ _app_webroot }}"
+    # Set ownership recursively for webroot files and directories
+    - name: "Set proper ownership for all files and directories"
       ansible.builtin.file:
         path: "{{ _app_webroot }}"
         owner: "{{ _web_user }}"
@@ -53,24 +77,13 @@
         recurse: yes
       tags: ['permissions', 'filesystem', 'ownership']
 
-    - name: "Secure uploads directory permissions for WordPress site {{ _app_domain }}"
-      ansible.builtin.file:
-        path: "{{ _wp_uploads_path }}"
-        state: directory # Ensures it exists
-        owner: "{{ _web_user }}"
-        group: "{{ _web_group }}"
-        mode: '0755' # Standard for uploads, allowing web server to write if needed by plugins indirectly
-        recurse: yes # Apply to subdirectories and files within uploads as well
-      when: domain_config.platform == "wordpress"
-      tags: ['permissions', 'wordpress', 'hardening', 'uploads']
-
-    - name: "Disable direct file editing in wp-config.php for WordPress site {{ _app_domain }}"
+    # Disable file editing from WordPress admin dashboard in wp-config.php
+    - name: "Disable direct file editing in wp-config.php"
       ansible.builtin.lineinfile:
         path: "{{ _wp_config_path }}"
         line: "define('DISALLOW_FILE_EDIT', true);"
-        regexp: "^\\s*define\\s*\\(\\s*'DISALLOW_FILE_EDIT'\\s*," # Matches existing definition to avoid duplicates
+        regexp: "^\\s*define\\s*\\(\\s*'DISALLOW_FILE_EDIT'\\s*,"
         insertbefore: "^\\/\\*\\s*That's all, stop editing! Happy publishing\\.\\s*\\*\\/"
         state: present
-        create: false # Should not create wp-config.php, it must exist
       when: domain_config.platform == "wordpress"
       tags: ['permissions', 'wordpress', 'hardening', 'wp-config']

@@ -84,6 +84,8 @@ PLAYBOOKS_CATALOG+=("13-setup-cdn.yml:WordPress CDN Setup:domain-wordpress")
 PLAYBOOKS_CATALOG+=("17-advanced-caching.yml:WordPress Advanced Caching:domain-wordpress")
 PLAYBOOKS_CATALOG+=("22-anti-hack.yml:WordPress Anti-Hack Measures:domain-wordpress")
 PLAYBOOKS_CATALOG+=("25-secure-database-domain.yml:WordPress MySQL Server Security Hardening Measures:domain-wordpress")
+PLAYBOOKS_CATALOG+=("26-setup-wp-cron.yml:WordPress System Cron Setup:domain-wordpress")
+
 
 PLAYBOOKS_CATALOG+=("laravel/01-install-laravel.yml:Laravel Project Creation:domain-laravel")
 PLAYBOOKS_CATALOG+=("laravel/02-configure-laravel.yml:Laravel Base Configuration & Nginx Setup:domain-laravel")
@@ -610,6 +612,8 @@ run_domain_specific_playbooks() {
         _run_domain_playbook "02-install-nginx-domain.yml" "Nginx Configuration for WordPress $domain_name" "$domain_name"
         _run_domain_playbook "04-install-wordpress.yml" "WordPress Core Installation for $domain_name" "$domain_name"
         _run_domain_playbook "25-secure-database-domain.yml" "WordPress Secure DataBase for $domain_name" "$domain_name"
+        _run_domain_playbook "26-setup-wp-cron.yml" "WordPress System Cron Setup for $domain_name" "$domain_name"
+
     elif [ "$platform" == "laravel" ]; then
         _run_domain_playbook "laravel/01-install-laravel.yml" "Laravel Project Creation for $domain_name" "$domain_name"
         _run_domain_playbook "laravel/02-configure-laravel.yml" "Laravel Base Configuration & Nginx Setup for $domain_name" "$domain_name"

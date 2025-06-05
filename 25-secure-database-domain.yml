@@ -15,7 +15,7 @@
     _app_db_password: "{{ domain_config.mysql_db_password }}" # Password for the app user
 
     # Path for WordPress specific configuration
-    _wp_config_path: "/var/www/{{ _app_domain }}/html/wp-config.php"
+    _wp_config_path: "/var/www/{{ _app_domain }}/wp-config.php"
 
     # MySQL configuration file path (can vary by distribution/version)
     # Default for Debian/Ubuntu based systems using mysqld.cnf in conf.d
