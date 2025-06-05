@@ -1,0 +1,72 @@
+# 01-install-mysql.yml
+- hosts: all
+  become: true
+  vars:
+    _effective_mysql_root_password: "{{ domain_config.mysql_root_password | default(GLOBAL_MYSQL_ROOT_PASSWORD | default(omit)) }}"
+
+  tasks:
+    - name: "Fail if MySQL root password is not properly set"
+      ansible.builtin.fail:
+        msg: |
+          MySQL root password is not defined.
+      when: _effective_mysql_root_password is not defined or (_effective_mysql_root_password | length == 0)
+
+    - name: "Install MySQL Python interface modules (pymysql is preferred)"
+      ansible.builtin.apt:
+        name: python3-pymysql
+        state: present
+        update_cache: yes
+      tags: ['mysql', 'deps']
+
+    - name: "Install MySQL server package"
+      ansible.builtin.apt:
+        name: mysql-server
+        state: present
+      tags: ['mysql', 'install']
+
+    - name: "Ensure MySQL service is started and enabled"
+      ansible.builtin.systemd:
+        name: mysql
+        state: started
+        enabled: yes
+      tags: ['mysql', 'service']
+
+    - name: "Try connect as root via UNIX socket (no password)"
+      community.mysql.mysql_info:
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+      register: mysql_root_socket_test
+      ignore_errors: true
+
+    - name: "Set/Update MySQL root password (via unix_socket — first install)"
+      community.mysql.mysql_user:
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        name: root
+        password: "{{ _effective_mysql_root_password }}"
+        host: localhost
+        state: present
+      when: mysql_root_socket_test is succeeded
+      no_log: true
+      tags: ['mysql', 'config', 'security']
+
+    - name: "Set/Update MySQL root password (via password — re-run or after first time)"
+      community.mysql.mysql_user:
+        login_user: root
+        login_password: "{{ _effective_mysql_root_password }}"
+        name: root
+        password: "{{ _effective_mysql_root_password }}"
+        host: localhost
+        state: present
+      when: mysql_root_socket_test is failed
+      no_log: true
+      tags: ['mysql', 'config', 'security']
+
+    - name: "Display MySQL version (for informational purposes)"
+      ansible.builtin.command: "mysql --version"
+      register: mysql_version_output
+      changed_when: false
+      check_mode: false
+
+    - name: "Print MySQL version (if verbosity is high)"
+      ansible.builtin.debug:
+        msg: "MySQL Server Version: {{ mysql_version_output.stdout }}"
+      when: ansible_verbosity > 1

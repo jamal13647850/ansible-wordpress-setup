@@ -1,0 +1,62 @@
+# 23-install-fail2ban.yml
+- hosts: all
+  become: true
+  vars:
+    # Determine if Fail2ban is enabled for this run (globally or per-domain)
+    effective_fail2ban_enabled: "{{ domain_config.fail2ban_enabled | default(GLOBAL_FAIL2BAN_ENABLED | default(false)) }}"
+
+    # Fail2ban jail parameters - prioritize domain_config, then globals, then hardcoded defaults
+    # For WordPress jail (these can be per-domain if needed, or use global defaults)
+    wp_jail_maxretry: "{{ domain_config.fail2ban_wp_maxretry | default(domain_config.fail2ban_maxretry | default(GLOBAL_FAIL2BAN_DEFAULT_MAXRETRY | default(5))) }}"
+    wp_jail_findtime: "{{ domain_config.fail2ban_wp_findtime | default(domain_config.fail2ban_findtime | default(GLOBAL_FAIL2BAN_DEFAULT_FINDTIME | default('10m'))) }}"
+    wp_jail_bantime: "{{ domain_config.fail2ban_wp_bantime | default(domain_config.fail2ban_bantime | default(GLOBAL_FAIL2BAN_DEFAULT_BANTIME | default('1h'))) }}"
+
+    _app_domain_slug: "{{ domain_config.domain | replace('.', '_') | replace('-', '_') }}"
+    _wp_access_log_path: "/var/www/{{ domain_config.domain }}/logs/access.log" # Standard access log path
+
+  tasks:
+
+    # WordPress specific Fail2ban configurations
+    - name: "Create Fail2ban filter for WordPress login attempts (if not exists)"
+      ansible.builtin.copy:
+        dest: /etc/fail2ban/filter.d/wordpress-common.conf # Common filter for all WP sites
+        content: |
+          [Definition]
+          failregex = ^%(__prefix_line)sINFO Matched POST \/wp-login\.php.* from <HOST>
+          ignoreregex =
+        owner: root
+        group: root
+        mode: '0644'
+        force: false # Do not overwrite if it already exists and content is different (e.g. user customized)
+      # This filter is global for any WordPress site, so run once if any WP site uses fail2ban
+      # For simplicity in per-domain run, this will be idempotent.
+      when: domain_config.platform == "wordpress" # Ensure it's relevant
+      notify: Restart Fail2ban service
+      tags: ['fail2ban', 'config', 'wordpress', 'filter']
+
+    - name: "Create Fail2ban jail for WordPress site: {{ domain_config.domain }}"
+      ansible.builtin.template: # Using template for more flexibility
+        dest: "/etc/fail2ban/jail.d/wordpress-{{ _app_domain_slug }}.conf"
+        src_content: |
+          [{{ 'wordpress-' + _app_domain_slug }}]
+          enabled = true
+          port = http,https
+          filter = wordpress-common # Use the common filter defined above
+          logpath = {{ _wp_access_log_path }}
+          maxretry = {{ wp_jail_maxretry }}
+          findtime = {{ wp_jail_findtime }}
+          bantime = {{ wp_jail_bantime }}
+        owner: root
+        group: root
+        mode: '0644'
+      when: domain_config.platform == "wordpress" # Only for WordPress sites
+      notify: Restart Fail2ban service
+      tags: ['fail2ban', 'config', 'wordpress', 'jail', 'domain_specific']
+
+  handlers:
+    - name: Restart Fail2ban service
+      ansible.builtin.systemd:
+        name: fail2ban
+        state: restarted
+      listen: "Restart Fail2ban service"
+      # No 'when' condition needed on handler if notifying tasks are correctly conditional.

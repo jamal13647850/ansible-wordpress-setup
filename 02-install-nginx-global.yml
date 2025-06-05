@@ -1,0 +1,104 @@
+---
+- hosts: all
+  become: true
+  vars:
+    nginx_arch: "amd64"
+
+    
+    nginx_apt_codename: >-
+      {% set release = ansible_distribution_release | lower %}
+      {% if release in ['noble', 'jammy'] %}
+        jammy
+      {% elif release in ['lunar'] %}
+        lunar
+      {% else %}
+        {{ release }}
+      {% endif %}
+
+  tasks:
+    - name: Ensure /etc/apt/keyrings exists (required for Ubuntu 22.04+/Jammy and newer)
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      tags: ['nginx', 'repo']
+
+    - name: Download Nginx ASCII GPG key
+      ansible.builtin.get_url:
+        url: https://nginx.org/keys/nginx_signing.key
+        dest: /etc/apt/keyrings/nginx_signing.key
+        mode: '0644'
+        force: true
+      tags: ['nginx', 'repo']
+
+    - name: Remove existing nginx signing keyring if exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings/nginx-signing.gpg
+        state: absent
+      tags: ['nginx', 'repo']
+
+    - name: Convert Nginx key to binary format (gpg --dearmor)
+      ansible.builtin.command: gpg --dearmor -o /etc/apt/keyrings/nginx-signing.gpg /etc/apt/keyrings/nginx_signing.key
+      tags: ['nginx', 'repo']
+
+    - name: Fix permissions for nginx signing keyring
+      ansible.builtin.file:
+        path: /etc/apt/keyrings/nginx-signing.gpg
+        owner: root
+        group: root
+        mode: '0644'
+      tags: ['nginx', 'repo']
+
+    - name: Clean apt cache
+      ansible.builtin.apt:
+        update_cache: no
+        autoclean: yes
+      tags: ['nginx', 'repo']
+
+    - name: Add Nginx official repository with signed-by option
+      ansible.builtin.apt_repository:
+        repo: "deb [arch={{ nginx_arch }} signed-by=/etc/apt/keyrings/nginx-signing.gpg] http://nginx.org/packages/ubuntu {{ nginx_apt_codename }} nginx"
+        state: present
+        filename: nginx
+        update_cache: yes
+      tags: ['nginx', 'repo']
+
+    - name: Install Nginx
+      ansible.builtin.apt:
+        name: nginx
+        state: latest
+        update_cache: yes
+      tags: ['nginx', 'install']
+
+    - name: Install CSF (ConfigServer Security & Firewall) if not already present
+      ansible.builtin.shell: |
+        wget -qO- https://download.configserver.com/csf.tgz | tar -xzf -
+        cd csf && sh install.sh
+      args:
+        creates: /etc/csf/csf.conf
+        chdir: /tmp
+      tags: ['firewall', 'csf', 'security', 'system']
+
+    - name: Ensure Nginx runs as www-data user
+      ansible.builtin.lineinfile:
+        path: /etc/nginx/nginx.conf
+        regexp: '^user\s+.*;'
+        line: 'user www-data;'
+        state: present
+      notify: Restart Nginx
+      tags: ['nginx', 'config']
+
+    - name: Ensure Nginx service is started and enabled
+      ansible.builtin.systemd:
+        name: nginx
+        state: started
+        enabled: yes
+      tags: ['nginx', 'service']
+
+  handlers:
+    - name: Restart Nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: restarted

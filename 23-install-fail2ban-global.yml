@@ -1,0 +1,54 @@
+# 23-install-fail2ban.yml
+- hosts: all
+  become: true
+  vars:
+    # For SSHD jail (should primarily use specific globals or general defaults)
+    sshd_jail_maxretry: "{{ GLOBAL_FAIL2BAN_SSHD_MAXRETRY | default(GLOBAL_FAIL2BAN_DEFAULT_MAXRETRY | default(3)) }}"
+    sshd_jail_findtime: "{{ GLOBAL_FAIL2BAN_SSHD_FINDTIME | default(GLOBAL_FAIL2BAN_DEFAULT_FINDTIME | default('10m')) }}"
+    sshd_jail_bantime: "{{ GLOBAL_FAIL2BAN_SSHD_BANTIME | default(GLOBAL_FAIL2BAN_DEFAULT_BANTIME | default('1d')) }}"
+
+
+
+  tasks:
+    - name: Install Fail2ban package
+      ansible.builtin.apt:
+        name: fail2ban
+        state: present
+        update_cache: yes
+      tags: ['fail2ban', 'install', 'system', 'security']
+
+    # System-wide Fail2ban configurations (e.g., for SSH)
+    # These tasks will run if fail2ban is enabled for any domain, but are idempotent.
+    - name: "Create or Update Fail2ban jail for SSHD (sshd.local)"
+      ansible.builtin.copy: # Using copy with content to ensure our settings are applied
+        dest: /etc/fail2ban/jail.d/sshd.local # Use .local to override defaults safely
+        content: |
+          [sshd]
+          enabled = true
+          port = ssh
+          # filter = sshd # filter is usually defined in fail2ban's defaults for sshd
+          logpath = %(sshd_log)s # Use fail2ban's variable for sshd log path
+          backend = %(sshd_backend)s # Use fail2ban's variable for backend
+          maxretry = {{ sshd_jail_maxretry }}
+          findtime = {{ sshd_jail_findtime }}
+          bantime = {{ sshd_jail_bantime }}
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart Fail2ban service
+      tags: ['fail2ban', 'config', 'ssh', 'system', 'security']
+
+    - name: Ensure Fail2ban service is started and enabled
+      ansible.builtin.systemd:
+        name: fail2ban
+        state: started
+        enabled: yes
+      tags: ['fail2ban', 'service', 'system']
+
+  handlers:
+    - name: Restart Fail2ban service
+      ansible.builtin.systemd:
+        name: fail2ban
+        state: restarted
+      listen: "Restart Fail2ban service"
+      # No 'when' condition needed on handler if notifying tasks are correctly conditional.

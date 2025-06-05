@@ -388,8 +388,8 @@ run_global_playbooks() {
     print_message "blue" "--- Running Global System Playbooks ---"
 
     run_playbook "00-update-upgrade.yml" "Base System Update and Upgrade" "false" ""
-    run_playbook "01-install-mysql.yml" "MySQL Installation" "false" ""
-    run_playbook "02-install-nginx.yml" "Nginx Installation" "false" ""
+    run_playbook "01-install-mysql-global.yml" "MySQL Installation" "false" ""
+    run_playbook "02-install-nginx-global.yml" "Nginx Installation" "false" ""
     run_playbook "03-install-php-composer-wpcli.yml" "PHP, Composer & WP-CLI Installation" "false" "" # Assume global default PHP here
 
     if [[ "$(is_feature_enabled "" "install_redis" "false")" == "true" ]];
@@ -406,7 +406,7 @@ run_global_playbooks() {
     fi
      if [[ "$(is_feature_enabled "" "fail2ban_enabled" "false")" == "true" ]];
      then
-        run_playbook "23-install-fail2ban.yml" "Fail2Ban Installation & SSHD Jail" "false" ""
+        run_playbook "23-install-fail2ban-global.yml" "Fail2Ban Installation & SSHD Jail" "false" ""
     fi
     if [[ "$(is_feature_enabled "" "enable_monitoring" "false")" == "true" ]];
     then
@@ -454,6 +454,8 @@ run_domain_specific_playbooks() {
 
     print_message "blue" "--- Running Playbooks for Domain: $domain_name (Platform: $platform) ---"
 
+    run_playbook "01-install-mysql-domain.yml" "MySQL Configiration for $domain_name" "false" "$domain_name"
+
     if [[ "$(is_feature_enabled "$domain_name" "enable_rollback" "false")" == "true" ]];
     then
         run_playbook "16-setup-rollback.yml" "Pre-action Backup for $domain_name" "false" "$domain_name"
@@ -461,6 +463,7 @@ run_domain_specific_playbooks() {
 
     if [ "$platform" == "wordpress" ];
     then
+        run_playbook "02-install-nginx-domain.yml" "Nginx Configiration for $domain_name" "false" "$domain_name"
         run_playbook "04-install-wordpress.yml" "WordPress Core Installation for $domain_name" "false" "$domain_name"
     elif [ "$platform" == "laravel" ];
     then
@@ -469,6 +472,11 @@ run_domain_specific_playbooks() {
     else
         print_message "red" "Unknown platform '$platform' for domain $domain_name. Skipping platform-specific core setup."
         return
+    fi
+
+    if [[ "$(is_feature_enabled "" "fail2ban_enabled" "false")" == "true" ]];
+     then
+        run_playbook "23-install-fail2ban-domain.yml" "Fail2Ban Configiration for $domain_name" "false" "$domain_name"
     fi
 
     # Check if ssl_email is defined and not empty for the domain to run SSL setup

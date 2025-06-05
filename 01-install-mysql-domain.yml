@@ -1,0 +1,48 @@
+# 01-install-mysql.yml
+- hosts: all
+  become: true
+  vars:
+    _effective_mysql_root_password: "{{ domain_config.mysql_root_password | default(GLOBAL_MYSQL_ROOT_PASSWORD | default(omit)) }}"
+    app_db_name: "{{ domain_config.mysql_db_name if domain_config is defined and domain_config.mysql_db_name is defined else omit }}"
+    app_db_user: "{{ domain_config.mysql_db_user if domain_config is defined and domain_config.mysql_db_user is defined else omit }}"
+    app_db_password: "{{ domain_config.mysql_db_password if domain_config is defined and domain_config.mysql_db_password is defined else omit }}"
+    app_user_privileges: "SELECT,INSERT,UPDATE,DELETE,CREATE,ALTER,DROP,INDEX,REFERENCES,CREATE TEMPORARY TABLES,LOCK TABLES,TRIGGER"
+
+  tasks:
+    - name: "Fail if MySQL root password is not properly set"
+      ansible.builtin.fail:
+        msg: |
+          MySQL root password is not defined.
+      when: _effective_mysql_root_password is not defined or (_effective_mysql_root_password | length == 0)
+
+    - name: "Ensure MySQL service is started and enabled"
+      ansible.builtin.systemd:
+        name: mysql
+        state: started
+        enabled: yes
+      tags: ['mysql', 'service']
+
+
+
+    - name: "Create the application database for domain {{ domain_config.domain }}"
+      community.mysql.mysql_db:
+        login_user: root
+        login_password: "{{ _effective_mysql_root_password }}"
+        name: "{{ app_db_name }}"
+        state: present
+      no_log: true
+      tags: ['mysql', 'db_setup']
+      when: domain_config is defined
+
+    - name: "Create the application user — {{ app_db_user }} — with limited privileges"
+      community.mysql.mysql_user:
+        login_user: root
+        login_password: "{{ _effective_mysql_root_password }}"
+        name: "{{ app_db_user }}"
+        password: "{{ app_db_password }}"
+        priv: "{{ app_db_name }}.*:{{ app_user_privileges }}"
+        host: "localhost"
+        state: present
+      no_log: true
+      tags: ['mysql', 'db_user_setup']
+      when: domain_config is defined
