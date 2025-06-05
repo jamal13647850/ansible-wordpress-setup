@@ -565,6 +565,12 @@ configure_wordpress_settings() {
     else
         store_domain_setting "$domain_name" "enable_anti_hack" "false"
     fi
+
+    if ask_yes_no "Clone WP Backup script (from github.com/jamal13647850/wpbackup.git) for $domain_name?" "n"; then
+        store_domain_setting "$domain_name" "enable_wpbackup_clone" "true"
+    else
+        store_domain_setting "$domain_name" "enable_wpbackup_clone" "false"
+    fi
 }
 
 configure_laravel_settings() {

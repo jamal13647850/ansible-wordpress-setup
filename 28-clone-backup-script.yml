@@ -1,0 +1,48 @@
+# File: 28-clone-backup-script.yml
+# Author: Sayyed Jamal Ghasemi
+# Full Stack Developer
+# Email: jamal13647850@gmail.com
+# LinkedIn: https://www.linkedin.com/in/jamal1364/
+# Instagram: https://www.instagram.com/jamal13647850
+# Telegram: https://t.me/jamaldev
+# Website: https://jamalghasemi.com
+# Date: 2024-06-20
+
+- hosts: all
+  become: true
+  vars:
+    # Define required variables
+    _app_domain: "{{ domain_config.domain }}"
+    _backup_repo_url: "https://github.com/jamal13647850/wpbackup.git"
+    _backup_dest_path: "/var/www/{{ _app_domain }}/wpbackup"
+    _web_user: "{{ domain_config.linux_username | default(GLOBAL_LINUX_USERNAME | default('www-data')) }}"
+    _web_group: "{{ domain_config.linux_group | default(GLOBAL_LINUX_GROUP | default('www-data')) }}"
+
+    # Control variable read from config file to enable cloning
+    _enable_clone: "{{ domain_config.enable_wpbackup_clone | default(false) | bool }}"
+
+  tasks:
+    # Clone wpbackup script repository if cloning is enabled and platform is WordPress
+    - name: "Clone wpbackup script for {{ _app_domain }} if enabled"
+      ansible.builtin.git:
+        repo: "{{ _backup_repo_url }}"
+        dest: "{{ _backup_dest_path }}"
+        clone: yes
+        update: yes  # Updates repository on subsequent runs
+      when:
+        - domain_config.platform == "wordpress"
+        - _enable_clone
+      tags: ['wordpress', 'backup', 'tools', 'domain_specific']
+
+    # Ensure correct ownership of the backup script directory recursively
+    - name: "Set correct ownership for the backup script directory"
+      ansible.builtin.file:
+        path: "{{ _backup_dest_path }}"
+        state: directory
+        owner: "{{ _web_user }}"
+        group: "{{ _web_group }}"
+        recurse: yes
+      when:
+        - domain_config.platform == "wordpress"
+        - _enable_clone
+      tags: ['wordpress', 'backup', 'tools', 'permissions']

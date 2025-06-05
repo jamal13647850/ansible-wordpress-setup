@@ -85,6 +85,7 @@ PLAYBOOKS_CATALOG+=("17-advanced-caching.yml:WordPress Advanced Caching:domain-w
 PLAYBOOKS_CATALOG+=("22-anti-hack.yml:WordPress Anti-Hack Measures:domain-wordpress")
 PLAYBOOKS_CATALOG+=("25-secure-database-domain.yml:WordPress MySQL Server Security Hardening Measures:domain-wordpress")
 PLAYBOOKS_CATALOG+=("26-setup-wp-cron.yml:WordPress System Cron Setup:domain-wordpress")
+PLAYBOOKS_CATALOG+=("28-clone-backup-script.yml:Clone WP Backup Script:domain-wordpress")
 
 
 PLAYBOOKS_CATALOG+=("laravel/01-install-laravel.yml:Laravel Project Creation:domain-laravel")
@@ -648,6 +649,8 @@ run_domain_specific_playbooks() {
         fi
         _run_domain_playbook_conditional "17-advanced-caching.yml" "WordPress Advanced Caching for $domain_name" "$domain_name" "enable_advanced_caching" "false"
         _run_domain_playbook_conditional "22-anti-hack.yml" "WordPress Anti-Hack Measures for $domain_name" "$domain_name" "enable_anti_hack" "false"
+        _run_domain_playbook_conditional "28-clone-backup-script.yml" "Clone WP Backup Script for $domain_name" "$domain_name" "enable_wpbackup_clone" "false"
+
     fi
 
     if [ "$platform" == "laravel" ]; then
