@@ -72,21 +72,6 @@
       notify: Restart Nginx
       tags: ['nginx', 'security', 'basic_auth', 'domain_specific']
 
-    - name: Run Cloudflare IP sync script for {{ nginx_domain }} (if script exists)
-      ansible.builtin.command: "/etc/nginx/sites-available/{{ nginx_domain }}helper/cloudflare-ip-sync.sh /etc/nginx/sites-available/{{ nginx_domain }}helper/cloudflare.conf"
-      args:
-        creates: "/etc/nginx/sites-available/{{ nginx_domain }}helper/cloudflare.conf"
-      changed_when: false
-      when: "lookup('file', '/etc/nginx/sites-available/{{ nginx_domain }}helper/cloudflare-ip-sync.sh', errors='ignore') is file"
-      tags: ['nginx', 'cdn_sync', 'domain_specific']
-
-    - name: Run ArvanCloud IP sync script for {{ nginx_domain }} (if script exists)
-      ansible.builtin.command: "/etc/nginx/sites-available/{{ nginx_domain }}helper/arvancloud-ip-sync.sh /etc/nginx/sites-available/{{ nginx_domain }}helper/arvancloud.conf"
-      args:
-        creates: "/etc/nginx/sites-available/{{ nginx_domain }}helper/arvancloud.conf"
-      changed_when: false
-      when: "lookup('file', '/etc/nginx/sites-available/{{ nginx_domain }}helper/arvancloud-ip-sync.sh', errors='ignore') is file"
-      tags: ['nginx', 'cdn_sync', 'domain_specific']
 
     - name: Create Nginx logs directory for domain {{ nginx_domain }}
       ansible.builtin.file:
@@ -115,6 +100,16 @@
         group: root
       notify: Restart Nginx
       tags: ['nginx', 'config', 'site_config', 'domain_specific']
+
+    - name: Ensure /etc/nginx/sites-enabled directory exists
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled
+        state: directory
+        owner: root
+        group: root
+        mode: '0755' 
+      become: true 
+      tags: ['nginx', 'config', 'prerequisites', 'site_enable', 'domain_specific'] 
 
     - name: Enable Nginx site for {{ nginx_domain }}
       ansible.builtin.file:

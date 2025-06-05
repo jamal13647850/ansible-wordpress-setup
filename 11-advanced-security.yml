@@ -10,25 +10,6 @@
 
 
   tasks:
-    # --- WordPress Specific Advanced Security ---
-    - name: "Install and activate Wordfence plugin for WordPress site: {{ domain_config.domain }}"
-      ansible.builtin.shell:
-        cmd: "wp plugin install wordfence --activate --allow-root"
-      args:
-        chdir: "{{ wp_domain_path }}"
-      # This task should only run if the platform is WordPress AND advanced security is enabled.
-      # The effective_enable_advanced_security is already checked at the play level.
-      when: domain_config.platform == "wordpress"
-      register: wordfence_install_result
-      changed_when: >
-        'already installed' not in wordfence_install_result.stdout and
-        ('activated' in wordfence_install_result.stdout or 'Success: Installed and activated' in wordfence_install_result.stdout)
-      failed_when: >
-        wordfence_install_result.rc != 0 and
-        'already installed and active' not in wordfence_install_result.stdout and
-        'already installed' not in wordfence_install_result.stdout
-      tags: ['security', 'wordpress', 'plugin', 'wordfence', 'domain_specific']
-      # Note: Further configuration of Wordfence (e.g., setup wizard, firewall optimization) is not handled here.
 
     # --- System-Wide Advanced Security (CSF Configuration) ---
     # This task applies a system-wide CSF setting.

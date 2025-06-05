@@ -61,7 +61,6 @@ PLAYBOOKS_CATALOG+=("23-install-fail2ban-global.yml:Fail2Ban Global Installation
 PLAYBOOKS_CATALOG+=("09-setup-monitoring.yml:Basic Monitoring Tools Global Installation:global")
 PLAYBOOKS_CATALOG+=("25-secure-database-global.yml:MySQL Server Security Hardening (General - Global):global") # Used for global 
 PLAYBOOKS_CATALOG+=("14-setup-docker.yml:Docker Support Global Installation:global")
-PLAYBOOKS_CATALOG+=("18-setup-waf.yml:WAF (ModSecurity with Nginx) Base Global Installation:global")
 PLAYBOOKS_CATALOG+=("19-manage-php.yml:Additional PHP Versions Management:global")
 PLAYBOOKS_CATALOG+=("15-generate-docs.yml:Generate Multilingual Docs (runs on localhost):local")
 
@@ -629,7 +628,6 @@ run_global_playbooks() {
 
     _run_global_playbook_conditional "25-secure-database-global.yml" "MySQL Server Security Hardening (General)" "secure_database" "false"
     _run_global_playbook_conditional "14-setup-docker.yml" "Docker Support Global Installation" "enable_docker" "false"
-    _run_global_playbook_conditional "18-setup-waf.yml" "WAF (ModSecurity with Nginx) Base Global Installation" "enable_waf" "false"
     _run_global_playbook_conditional "19-manage-php.yml" "Additional PHP Versions Management" "enable_php_versions" "false"
     
     if [[ "$(is_feature_enabled "" "enable_multilingual_docs" "false")" == "true" ]]; then

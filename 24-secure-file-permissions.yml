@@ -36,7 +36,7 @@
     - name: "Set secure permissions for wp-config.php for WordPress site {{ _app_domain }}"
       ansible.builtin.file:
         path: "{{ _wp_config_path }}"
-        mode: '0600' # More restrictive permissions
+        mode: '0640' # More restrictive permissions
         owner: "{{ _web_user }}"
         group: "{{ _web_group }}"
       when: domain_config.platform == "wordpress" and ansible_check_mode == false # Check mode can't know if file exists yet if created by earlier play

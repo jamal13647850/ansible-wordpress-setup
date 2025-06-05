@@ -54,8 +54,10 @@ server {
 # HTTPS Server (if SSL is enabled)
 {% if domain_config.ssl_email is defined and domain_config.ssl_email != "" %} #
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2; #
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    
     server_name {{ domain_config.domain }} www.{{ domain_config.domain }}{% if domain_config.extra_domains is defined %} {% for extra_domain in domain_config.extra_domains %}{{ extra_domain }} www.{{ extra_domain }}{% endfor %}{% endif %}; #
     root /var/www/{{ domain_config.domain }}/html; #
     index index.php index.html index.htm;

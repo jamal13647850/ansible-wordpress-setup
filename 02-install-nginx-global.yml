@@ -90,6 +90,17 @@
       notify: Restart Nginx
       tags: ['nginx', 'config']
 
+
+    - name: "Ensure 'include /etc/nginx/sites-enabled/*;' is present in Nginx http block"
+      ansible.builtin.lineinfile:
+        path: /etc/nginx/nginx.conf
+        line: "    include /etc/nginx/sites-enabled/*;"
+        state: present
+        insertafter: "^\\s*include\\s+/etc/nginx/conf.d/\\*.conf;"
+        backup: yes 
+      notify: Restart Nginx
+      tags: ['nginx', 'config', 'sites_enabled']
+
     - name: Ensure Nginx service is started and enabled
       ansible.builtin.systemd:
         name: nginx
