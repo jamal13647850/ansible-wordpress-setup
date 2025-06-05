@@ -1,0 +1,30 @@
+# File: 26-setup-wp-cron.yml
+# Author: Sayyed Jamal Ghasemi
+# Full Stack Developer
+# Email: jamal13647850@gmail.com
+# LinkedIn: https://www.linkedin.com/in/jamal1364/
+# Instagram: https://www.instagram.com/jamal13647850
+# Telegram: https://t.me/jamaldev
+# Website: https://jamalghasemi.com
+# Date: 2024-06-20
+
+- hosts: all
+  become: true
+  vars:
+    _app_domain: "{{ domain_config.domain }}"
+    _web_user: "{{ domain_config.linux_username | default(GLOBAL_LINUX_USERNAME | default('www-data')) }}"
+
+  tasks:
+    # Set up a system cron job to run WordPress cron tasks every 5 minutes
+    - name: "Set up system cron job to run WordPress cron tasks for {{ _app_domain }}"
+      ansible.builtin.cron:
+        name: "WordPress Cron for {{ _app_domain }}"
+        minute: "*/5"  # Run every 5 minutes
+        user: "{{ _web_user }}"  # Run as the web server user
+        job: "wget -q -O - https://{{ _app_domain }}/wp-cron.php?doing_wp_cron >/dev/null 2>&1"
+        # Use wget to call the URL, redirecting output to /dev/null to avoid unnecessary logs
+        cron_file: "ansible_wp_{{ _app_domain | replace('.', '_') }}"
+        # Creates a separate cron file per domain under /etc/cron.d
+        state: present
+      when: domain_config.platform == "wordpress"
+      tags: ['wordpress', 'cron', 'optimization']
