@@ -1,0 +1,66 @@
+# 25-secure-database.yml
+- hosts: all
+  become: true
+  vars:
+    # Determine if database securing policy is enabled for this run
+    effective_secure_database_policy: "{{ domain_config.secure_database | default(GLOBAL_SECURE_DATABASE_POLICY | default(true)) }}"
+
+    # MySQL root password (should be vaulted and globally defined)
+    effective_mysql_root_password: "{{ domain_config.mysql_root_password | default(GLOBAL_MYSQL_ROOT_PASSWORD | default('EnsureThisIsTheRealRootPassword!')) }}" # Sensitive
+
+    # Application specific database details from domain_config
+    _app_domain: "{{ domain_config.domain }}"
+    _app_db_name: "{{ domain_config.mysql_db_name }}"
+    _app_db_user: "{{ domain_config.mysql_db_user }}" # This is the user whose privileges we'll ensure/limit
+    _app_db_password: "{{ domain_config.mysql_db_password }}" # Password for the app user
+
+    # Path for WordPress specific configuration
+    _wp_config_path: "/var/www/{{ _app_domain }}/html/wp-config.php"
+
+    # MySQL configuration file path (can vary by distribution/version)
+    # Default for Debian/Ubuntu based systems using mysqld.cnf in conf.d
+    mysql_server_config_file: "{{ GLOBAL_MYSQL_CONFIG_FILE | default('/etc/mysql/mysql.conf.d/mysqld.cnf') }}"
+
+    # Recommended secure privileges for a web application user
+    # (SELECT, INSERT, UPDATE, DELETE are typical for data manipulation)
+    # Add others like CREATE TEMPORARY TABLES, EXECUTE if specifically needed by the app. Avoid broad grants like ALTER, DROP, CREATE.
+    secure_app_user_privs: "SELECT,INSERT,UPDATE,DELETE,INDEX,REFERENCES,TRIGGER" # More restrictive than ALL
+
+  tasks:
+    - name: "Remove MySQL command history file for root user (if it exists)"
+      ansible.builtin.file:
+        path: /root/.mysql_history # Path for root user when become: true
+        state: absent
+      tags: ['database', 'security', 'mysql_config', 'system']
+
+    - name: "Disable MySQL command history for root user by linking to /dev/null"
+      ansible.builtin.file:
+        src: /dev/null
+        dest: /root/.mysql_history # Path for root user when become: true
+        state: link
+        force: yes # Override if .mysql_history exists as a file
+      tags: ['database', 'security', 'mysql_config', 'system']
+
+    - name: "Apply security settings to MySQL server configuration ({{ mysql_server_config_file }})"
+      ansible.builtin.blockinfile:
+        path: "{{ mysql_server_config_file }}"
+        block: |
+          # Ansible managed: General security settings
+          local-infile=0
+          skip-show-database
+          # secure-file-priv=/var/lib/mysql-files # This needs careful planning; ensure directory exists and is secure.
+          # secure-file-priv requires MySQL to be restarted AND the directory to be exclusively for MySQL.
+          # For broader compatibility, this is commented out by default. Uncomment if an upload dir is configured.
+        marker: "# {mark} ANSIBLE MANAGED BLOCK FOR GENERAL SECURITY"
+        insertafter: "\\[mysqld\\]" # Ensure it's placed within the [mysqld] section
+        create: true # Create the file if it doesn't exist (though mysqld.cnf should exist)
+      notify: Restart MySQL service
+      tags: ['database', 'security', 'mysql_config', 'system']
+
+  handlers:
+    - name: Restart MySQL service
+      ansible.builtin.systemd:
+        name: mysql # Common service name
+        state: restarted
+      listen: "Restart MySQL service"
+      # No 'when' needed here as it's tied to notifying tasks.

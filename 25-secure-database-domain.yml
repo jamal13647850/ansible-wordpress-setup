@@ -1,0 +1,68 @@
+# 25-secure-database.yml
+- hosts: all
+  become: true
+  vars:
+    # Determine if database securing policy is enabled for this run
+    effective_secure_database_policy: "{{ domain_config.secure_database | default(GLOBAL_SECURE_DATABASE_POLICY | default(true)) }}"
+
+    # MySQL root password (should be vaulted and globally defined)
+    effective_mysql_root_password: "{{ domain_config.mysql_root_password | default(GLOBAL_MYSQL_ROOT_PASSWORD | default('EnsureThisIsTheRealRootPassword!')) }}" # Sensitive
+
+    # Application specific database details from domain_config
+    _app_domain: "{{ domain_config.domain }}"
+    _app_db_name: "{{ domain_config.mysql_db_name }}"
+    _app_db_user: "{{ domain_config.mysql_db_user }}" # This is the user whose privileges we'll ensure/limit
+    _app_db_password: "{{ domain_config.mysql_db_password }}" # Password for the app user
+
+    # Path for WordPress specific configuration
+    _wp_config_path: "/var/www/{{ _app_domain }}/html/wp-config.php"
+
+    # MySQL configuration file path (can vary by distribution/version)
+    # Default for Debian/Ubuntu based systems using mysqld.cnf in conf.d
+    mysql_server_config_file: "{{ GLOBAL_MYSQL_CONFIG_FILE | default('/etc/mysql/mysql.conf.d/mysqld.cnf') }}"
+
+    # Recommended secure privileges for a web application user
+    # (SELECT, INSERT, UPDATE, DELETE are typical for data manipulation)
+    # Add others like CREATE TEMPORARY TABLES, EXECUTE if specifically needed by the app. Avoid broad grants like ALTER, DROP, CREATE.
+    secure_app_user_privs: "SELECT,INSERT,UPDATE,DELETE,INDEX,REFERENCES,TRIGGER" # More restrictive than ALL
+
+  tasks:
+    - name: "Ensure application user '{{ _app_db_user }}' has secure (limited) privileges on database '{{ _app_db_name }}'"
+      community.mysql.mysql_user:
+        login_user: root
+        login_password: "{{ effective_mysql_root_password }}"
+        name: "{{ _app_db_user }}" # Managing the main application user
+        password: "{{ _app_db_password }}" # Ensure password remains the same or is updated if needed
+        priv: "{{ _app_db_name }}.*:{{ secure_app_user_privs }}"
+        host: "localhost" # Assuming app and DB are on the same host
+        state: present # Ensures user exists with these privileges
+      no_log: false # Hide sensitive login credentials
+      tags: ['database', 'security', 'mysql_user', 'domain_specific']
+      # Note: This task assumes the user/database was created by 01-install-mysql.yml.
+      # It refines privileges here. If user doesn't exist, it creates it.
+
+    - name: "Add custom user/usermeta table defines to wp-config.php for {{ _app_domain }}"
+      ansible.builtin.blockinfile:
+        path: "{{ _wp_config_path }}"
+        marker: "// {mark} ANSIBLE MANAGED BLOCK FOR CUSTOM USER TABLES"
+        block: |
+          // For security plugins that rename user tables (e.g., iThemes Security)
+          // Ensure $table_prefix is defined before this block in wp-config.php
+          if (isset($table_prefix)) {
+            define('CUSTOM_USER_TABLE', $table_prefix . 'users_custom');
+            define('CUSTOM_USER_META_TABLE', $table_prefix . 'usermeta_custom');
+          }
+        insertbefore: "^\\/\\*\\s*That's all, stop editing! Happy publishing\\.\\s*\\*\\/"
+        create: false # Do not create wp-config.php
+      when: domain_config.platform == "wordpress"
+      tags: ['database', 'security', 'wordpress', 'wp-config', 'domain_specific']
+      # Note: Merely defining these constants does not rename the tables.
+      # Table renaming must be done separately by a plugin or manually.
+
+  handlers:
+    - name: Restart MySQL service
+      ansible.builtin.systemd:
+        name: mysql # Common service name
+        state: restarted
+      listen: "Restart MySQL service"
+      # No 'when' needed here as it's tied to notifying tasks.
