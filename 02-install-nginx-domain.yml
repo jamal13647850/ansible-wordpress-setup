@@ -3,13 +3,12 @@
   become: true
   vars:
     nginx_domain: "{{ domain_config.domain }}"
-    nginx_php_version: "{{ domain_config.php_version | default(GLOBAL_DEFAULT_PHP_VERSION | default('8.2')) }}"
+    nginx_php_version: "{{ domain_config.php_version | default(GLOBAL_PHP_DEFAULT_VERSION | default('8.2')) }}"
     nginx_enable_basic_auth: "{{ domain_config.enable_basic_auth | default(false) }}"
     nginx_basic_auth_user: "{{ domain_config.basic_auth_user | default('') }}"
     nginx_basic_auth_password: "{{ domain_config.basic_auth_password | default('') }}"
     nginx_arch: "amd64"
 
-    # تعیین خودکار کدنام apt بر اساس نسخه اوبونتو
     nginx_apt_codename: >-
       {% set release = ansible_distribution_release | lower %}
       {% if release in ['noble', 'jammy'] %}
@@ -30,7 +29,7 @@
         mode: '0755'
       tags: ['nginx', 'config', 'domain_specific']
 
-    - name: Copy Nginx helper configuration files for domain {{ nginx_domain }}
+    - name: Copy general Nginx helper configuration files for domain {{ nginx_domain }}
       ansible.builtin.template:
         src: "{{ item.src }}"
         dest: "/etc/nginx/sites-available/{{ nginx_domain }}helper/{{ item.dest }}"
@@ -38,10 +37,7 @@
         owner: root
         group: root
       loop:
-        - { src: 'templates/arvancloud-ip-sync.sh.j2', dest: 'arvancloud-ip-sync.sh', mode: '0755' }
         - { src: 'templates/cache.j2', dest: 'cache.conf' }
-        - { src: 'templates/cloudflare-ip-sync.sh.j2', dest: 'cloudflare-ip-sync.sh', mode: '0755' }
-        - { src: 'templates/cloudflare.j2', dest: 'cloudflare.conf' }
         - { src: 'templates/filemanager.j2', dest: 'filemanager.conf' }
         - { src: 'templates/general.j2', dest: 'general.conf' }
         - { src: 'templates/gzip.j2', dest: 'gzip.conf' }
@@ -51,6 +47,41 @@
         - { src: 'templates/wordpress.j2', dest: 'wordpress.conf' }
       notify: Restart Nginx
       tags: ['nginx', 'config', 'domain_specific']
+
+    - name: Template, execute, and schedule CDN IP sync script
+      when: domain_config.enable_cdn | default(false) and domain_config.cdn_ip_source in ['arvancloud', 'cloudflare']
+      block:
+        - name: "Template {{ domain_config.cdn_ip_source }} IP sync script"
+          ansible.builtin.template:
+            src: "templates/{{ domain_config.cdn_ip_source }}-ip-sync.sh.j2"
+            dest: "/etc/nginx/sites-available/{{ nginx_domain }}helper/{{ domain_config.cdn_ip_source }}-ip-sync.sh"
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: "Execute {{ domain_config.cdn_ip_source }} IP sync script to generate Nginx config"
+          ansible.builtin.command:
+            cmd: "bash {{ domain_config.cdn_ip_source }}-ip-sync.sh"
+            chdir: "/etc/nginx/sites-available/{{ nginx_domain }}helper/"
+          register: sync_script_result
+          changed_when: sync_script_result.rc == 0
+          notify: Restart Nginx
+
+        - name: Display sync script output
+          ansible.builtin.debug:
+            var: sync_script_result.stdout_lines
+          when: sync_script_result.stdout is defined
+
+        - name: "Set up daily cron job to sync {{ domain_config.cdn_ip_source }} IPs"
+          ansible.builtin.cron:
+            name: "Update {{ domain_config.cdn_ip_source }} IPs for {{ nginx_domain }}"
+            minute: "{{ 59 | random }}"
+            hour: "{{ 5 | random(start=2) }}"
+            job: "cd /etc/nginx/sites-available/{{ nginx_domain }}helper/ && bash ./{{ domain_config.cdn_ip_source }}-ip-sync.sh >/dev/null 2>&1"
+            user: root
+            cron_file: "ansible_cdn_sync_{{ nginx_domain | replace('.', '_') }}"
+            state: present
+      tags: ['nginx', 'config', 'cdn', 'domain_specific']
 
     - name: Install htpasswd utility (apache2-utils)
       ansible.builtin.apt:
@@ -72,7 +103,6 @@
       notify: Restart Nginx
       tags: ['nginx', 'security', 'basic_auth', 'domain_specific']
 
-
     - name: Create Nginx logs directory for domain {{ nginx_domain }}
       ansible.builtin.file:
         path: "/var/www/{{ nginx_domain }}/logs"
@@ -91,9 +121,14 @@
         mode: '0755'
       tags: ['nginx', 'config', 'cache', 'domain_specific']
 
-    - name: Copy main Nginx site configuration for {{ nginx_domain }}
+    - name: "Check if SSL certificate already exists for {{ nginx_domain }}"
+      ansible.builtin.stat:
+        path: "/etc/letsencrypt/live/{{ nginx_domain }}/fullchain.pem"
+      register: ssl_cert_stat
+
+    - name: Copy initial/final Nginx site configuration for {{ nginx_domain }}
       ansible.builtin.template:
-        src: "templates/nginx.conf.j2"
+        src: "{{ 'templates/nginx.conf.j2' if ssl_cert_stat.stat.exists else 'templates/nginx-http-only.conf.j2' }}"
         dest: "/etc/nginx/sites-available/{{ nginx_domain }}.conf"
         mode: '0644'
         owner: root
@@ -107,9 +142,9 @@
         state: directory
         owner: root
         group: root
-        mode: '0755' 
-      become: true 
-      tags: ['nginx', 'config', 'prerequisites', 'site_enable', 'domain_specific'] 
+        mode: '0755'
+      become: true
+      tags: ['nginx', 'config', 'prerequisites', 'site_enable', 'domain_specific']
 
     - name: Enable Nginx site for {{ nginx_domain }}
       ansible.builtin.file:

@@ -1,0 +1,21 @@
+{# templates/nginx-http-only.conf.j2 - Temporary config for Let's Encrypt validation #}
+server {
+    listen 80;
+    listen [::]:80;
+
+    server_name {{ domain_config.domain }} www.{{ domain_config.domain }};
+
+    {% if domain_config.platform == 'laravel' %}
+    root /var/www/{{ domain_config.domain }}/html/public;
+    {% else %}
+    root /var/www/{{ domain_config.domain }}/html;
+    {% endif %}
+
+    location ~ /.well-known/acme-challenge/ {
+        allow all;
+    }
+
+    location / {
+        return 404; 
+    }
+}

@@ -53,6 +53,7 @@ domains:
     wordpress_auth_salt: "k3yS@ltF0rAuthW0rdPr3ssR4nd0m"
     wordpress_admin_user: "demo_admin"
     secure_database: false
+    cdn_ip_source: "arvancloud"
     cache_type: "memcached"
     wordpress_nonce_key: "r4nd0mN0nc3K3yF0rW0rdPr3ssS3cur3"
     ssl_email: "contact@demo-domain.com"

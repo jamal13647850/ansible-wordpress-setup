@@ -97,8 +97,15 @@ server {
     open_file_cache_errors on; #
 
     # Include helper configurations
-    include /etc/nginx/sites-available/{{ domain_config.domain }}helper/cloudflare.conf; #
-    include /etc/nginx/sites-available/{{ domain_config.domain }}helper/arvancloud.conf; #
+    {# Conditionally include CDN configuration #}
+    {% if domain_config.enable_cdn | default(false) %}
+        {% if domain_config.cdn_ip_source == 'cloudflare' %}
+            include /etc/nginx/sites-available/{{ domain_config.domain }}helper/cloudflare.conf;
+        {% elif domain_config.cdn_ip_source == 'arvancloud' %}
+            include /etc/nginx/sites-available/{{ domain_config.domain }}helper/arvancloud.conf;
+        {% endif %}
+    {% endif %}
+
     include /etc/nginx/sites-available/{{ domain_config.domain }}helper/keepalive.conf; #
     include /etc/nginx/sites-available/{{ domain_config.domain }}helper/gzip.conf; #
     include /etc/nginx/sites-available/{{ domain_config.domain }}helper/redirects.conf; #
