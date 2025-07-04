@@ -1,0 +1,8 @@
+[{{ 'wordpress-' + _app_domain_slug }}]
+enabled = true
+port = http,https
+filter = wordpress-common
+logpath = {{ _wp_access_log_path }}
+maxretry = {{ wp_jail_maxretry }}
+findtime = {{ wp_jail_findtime }}
+bantime = {{ wp_jail_bantime }}

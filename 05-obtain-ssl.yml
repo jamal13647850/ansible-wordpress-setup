@@ -1,94 +1,149 @@
-# 05-obtain-ssl.yml
+---
+# -----------------------------------------------------------------------------
+# Ansible Playbook for Obtaining and Configuring SSL Certificates
+#
+# Author: Sayyed Jamal Ghasemi
+# Role: Full Stack Developer
+# Email: jamal13647850@gmail.com
+# LinkedIn: https://www.linkedin.com/in/jamal1364/
+# Instagram: https://www.instagram.com/jamal13647850
+# Telegram: https://t.me/jamaldev
+# Website: https://jamalghasemi.com
+# Date: 2025-06
+# -----------------------------------------------------------------------------
+
 - hosts: all
   become: true
+  name: "Obtain and configure SSL certificates"
+
   vars:
-    effective_domain: "{{ domain_config.domain }}"
+    # Intelligent domain list creation to avoid issues like double 'www.www' prefix
+    # 1. Initial list contains only the base domain
+    certbot_domain_list:
+      - "{{ domain_config.domain }}"
+
+    # 2. If the domain does not start with 'www.', add the 'www.' prefixed version to the list
+    certbot_domain_list_final: >-
+      {{
+        certbot_domain_list +
+        ['www.' + domain_config.domain]
+        if not domain_config.domain.startswith('www.')
+        else certbot_domain_list
+      }}
+
+    # 3. Generate the CLI -d arguments for certbot for all domains in the list
+    certbot_domains_cli: >-
+      {{
+        certbot_domain_list_final
+        | map('regex_replace', '^(.*)$', '-d \\1')
+        | join(' ')
+      }}
+
+    # Variable to control skipping of DNS check during server migration scenario
+    skip_dns_check_for_migration: "{{ domain_config.skip_dns_check_for_migration | default(false) }}"
+
+    # Email associated with SSL certificate registration, fallback to global default
     effective_ssl_email: "{{ domain_config.ssl_email | default(GLOBAL_LETSENCRYPT_DEFAULT_EMAIL | default('')) }}"
+
+    # Flag indicating whether to use Let's Encrypt staging environment (test certs)
     le_test_cert: "{{ domain_config.letsencrypt_test_cert | default(GLOBAL_LETSENCRYPT_TEST_CERT | default(false)) }}"
+
+    # Option for certbot to use staging server if test cert is enabled
     le_staging_server_option: "{% if le_test_cert | bool %}--test-cert{% else %}{% endif %}"
+
+    # Options for certbot command
     le_redirect_option: "--redirect"
     le_nginx_plugin_option: "--nginx"
+
   tasks:
-    - name: Install Certbot and its Nginx plugin
+    - name: Install Certbot and its Nginx plugin package
       ansible.builtin.apt:
         name: python3-certbot-nginx
         state: latest
         update_cache: yes
       tags: ['ssl', 'certbot', 'prerequisites', 'system']
 
-    - name: "Check if domain '{{ effective_domain }}' resolves to this server's public IP"
-      ansible.builtin.shell:
-        cmd: "SERVER_IP=$(curl -s --connect-timeout 5 ifconfig.me || curl -s --connect-timeout 5 ipinfo.io/ip); if [ -z \"$SERVER_IP\" ]; then echo 'Failed to get server IP' >&2; exit 1; fi; host {{ effective_domain }} | grep -q \"$SERVER_IP\""
-      register: domain_resolves_to_server_ip
-      ignore_errors: true
-      changed_when: false
-      tags: ['ssl', 'dns_check']
+    - name: "Block for standard HTTP-01 challenge (Normal Install)"
+      when: not skip_dns_check_for_migration
+      block:
+        - name: "Verify domain DNS resolves to this server's public IP"
+          ansible.builtin.shell:
+            cmd: |
+              SERVER_IP=$(curl -s --connect-timeout 5 ifconfig.me || curl -s --connect-timeout 5 ipinfo.io/ip)
+              if [ -z "$SERVER_IP" ]; then
+                echo 'Failed to get server IP' >&2
+                exit 1
+              fi
+              host {{ domain_config.domain }} | grep -q "$SERVER_IP"
+          register: domain_resolves_to_server_ip
+          ignore_errors: true
+          changed_when: false
 
-    - name: "Set fact for DNS resolution status for {{ effective_domain }}"
-      ansible.builtin.set_fact:
-        dns_ok_for_ssl: "{{ domain_resolves_to_server_ip.rc == 0 }}"
-      tags: ['ssl', 'dns_check']
+        - name: "Set DNS resolution status fact for SSL issuance"
+          ansible.builtin.set_fact:
+            dns_ok_for_ssl: "{{ domain_resolves_to_server_ip.rc == 0 }}"
 
-    - name: "Display DNS resolution check result for {{ effective_domain }}"
-      ansible.builtin.debug:
-        msg: "DNS resolution for {{ effective_domain }} to this server's IP: {{ 'OK' if dns_ok_for_ssl else 'FAILED or NOT CHECKED (server IP could not be fetched)' }}. Output: {{ domain_resolves_to_server_ip.stdout | default('') }} {{ domain_resolves_to_server_ip.stderr | default('') }}"
-      tags: ['ssl', 'dns_check']
+        - name: "Obtain SSL certificate from Let's Encrypt using HTTP-01 challenge"
+          ansible.builtin.command:
+            cmd: >
+              certbot {{ le_nginx_plugin_option }}
+              {{ certbot_domains_cli }}
+              --email {{ effective_ssl_email }}
+              --agree-tos {{ le_redirect_option }}
+              --non-interactive {{ le_staging_server_option | trim }}
+          when: dns_ok_for_ssl | bool
+          notify: Restart Nginx service
+          register: certbot_result
+          failed_when:
+            - certbot_result.rc != 0
+            - "'too many certificates already issued' not in certbot_result.stderr and 'rateLimited' not in certbot_result.stderr"
+            - "'Unable to find a virtual host' not in certbot_result.stderr"
+          changed_when: >
+            certbot_result.rc == 0 and
+            ("Successfully received certificate" in certbot_result.stdout or
+             "Certificate not yet due for renewal" in certbot_result.stdout)
+          tags: ['ssl', 'certbot', 'obtain_cert']
 
-    - name: "Check if SSL certificate already exists for {{ effective_domain }}"
+    - name: "Block for DNS-01 challenge (Migration Scenario)"
+      when: skip_dns_check_for_migration
+      block:
+        - name: "Placeholder for obtaining SSL certificate using DNS-01 challenge"
+          ansible.builtin.debug:
+            msg:
+              - "SKIPPING HTTP-01 check due to migration scenario."
+              - "Please replace this task with a real DNS-01 challenge implementation."
+              - "Example for Cloudflare:"
+              - " certbot certonly --dns-cloudflare --dns-cloudflare-credentials /path/to/creds.ini {{ certbot_domains_cli }}"
+              - "ACTION REQUIRED: Install required plugins and provide credentials."
+          register: certbot_result
+          changed_when: false
+
+    - name: "Check existence of SSL certificate before finalizing configuration"
       ansible.builtin.stat:
-        path: "/etc/letsencrypt/live/{{ effective_domain }}/fullchain.pem"
+        path: "/etc/letsencrypt/live/{{ domain_config.domain }}/fullchain.pem"
       register: ssl_cert_stat
       tags: ['ssl', 'cert_check']
 
-    - name: "Obtain SSL certificate with Certbot for {{ effective_domain }} (and www subdomain)"
-      ansible.builtin.command:
-        cmd: "certbot {{ le_nginx_plugin_option }} -d {{ effective_domain }} -d www.{{ effective_domain }} --email {{ effective_ssl_email }} --agree-tos {{ le_redirect_option }} --non-interactive {{ le_staging_server_option | trim }}"
-      when:
-        - not ssl_cert_stat.stat.exists
-        - dns_ok_for_ssl | bool
-      notify: Restart Nginx service
-      register: certbot_result
-      failed_when:
-        - certbot_result.rc != 0
-        - "'too many certificates already issued' not in certbot_result.stderr and 'rateLimited' not in certbot_result.stderr"
-        - "'Unable to find a virtual host' not in certbot_result.stderr"
-      changed_when: certbot_result.rc == 0 and ("Successfully received certificate" in certbot_result.stdout or "Certificate not yet due for renewal" in certbot_result.stdout)
-      tags: ['ssl', 'certbot', 'obtain_cert']
-
-    - name: "Display Certbot command result for {{ effective_domain }}"
+    - name: "Display Certbot command result for debugging"
       ansible.builtin.debug:
         var: certbot_result
         verbosity: 1
-      when: certbot_result is defined
-      tags: ['ssl', 'certbot', 'debug']
-
-    - name: "Warning if domain '{{ effective_domain }}' DNS did not resolve correctly for SSL"
-      ansible.builtin.debug:
-        msg: "WARNING: The domain '{{ effective_domain }}' (or www) did not resolve to this server's IP or server IP could not be fetched. SSL certificate could not be automatically obtained by Certbot. Please check DNS records."
-      when:
-        - not ssl_cert_stat.stat.exists
-        - not (dns_ok_for_ssl | bool)
-      tags: ['ssl', 'dns_check', 'warning']
-
-    - name: "Warning if Certbot failed for {{ effective_domain }} for other reasons"
-      ansible.builtin.debug:
-        msg: "WARNING: Certbot failed to obtain SSL certificate for '{{ effective_domain }}'. Review logs. Certbot stderr: {{ certbot_result.stderr | default('N/A') }}"
       when:
         - certbot_result is defined
-        - certbot_result.rc != 0
-        - not ("Successfully received certificate" in certbot_result.stdout or "Certificate not yet due for renewal" in certbot_result.stdout)
-        - not ('too many certificates already issued' in certbot_result.stderr or 'rateLimited' in certbot_result.stderr or 'Unable to find a virtual host' in certbot_result.stderr)
-      tags: ['ssl', 'certbot', 'warning']
+        - "'msg' not in certbot_result"  # Avoid showing debug placeholder message
+      tags: ['ssl', 'certbot', 'debug']
 
-    - name: "Finalize Nginx configuration with proper HTTPS settings"
+    - name: "Finalize Nginx configuration with SSL settings when new cert is issued"
       ansible.builtin.template:
         src: "templates/nginx.conf.j2"
-        dest: "/etc/nginx/sites-available/{{ effective_domain }}.conf"
+        dest: "/etc/nginx/sites-available/{{ domain_config.domain }}.conf"
         mode: '0644'
         owner: root
         group: root
       notify: Restart Nginx service
-      when: certbot_result.changed | default(false)
+      when:
+        - (certbot_result.changed | default(false)) 
+        - not ssl_cert_stat.stat.exists
       tags: ['ssl', 'nginx', 'finalize']
 
   handlers:

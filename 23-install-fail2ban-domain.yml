@@ -35,21 +35,13 @@
       tags: ['fail2ban', 'config', 'wordpress', 'filter']
 
     - name: "Create Fail2ban jail for WordPress site: {{ domain_config.domain }}"
-      ansible.builtin.template: # Using template for more flexibility
+      ansible.builtin.template:
+        src: templates/wordpress-jail.conf.j2  
         dest: "/etc/fail2ban/jail.d/wordpress-{{ _app_domain_slug }}.conf"
-        src_content: |
-          [{{ 'wordpress-' + _app_domain_slug }}]
-          enabled = true
-          port = http,https
-          filter = wordpress-common # Use the common filter defined above
-          logpath = {{ _wp_access_log_path }}
-          maxretry = {{ wp_jail_maxretry }}
-          findtime = {{ wp_jail_findtime }}
-          bantime = {{ wp_jail_bantime }}
         owner: root
         group: root
         mode: '0644'
-      when: domain_config.platform == "wordpress" # Only for WordPress sites
+      when: domain_config.platform == "wordpress"
       notify: Restart Fail2ban service
       tags: ['fail2ban', 'config', 'wordpress', 'jail', 'domain_specific']
 

@@ -2,7 +2,6 @@
 # generate_config.sh
 #
 # Script to generate the group_vars/all.yml configuration file for Ansible projects
-# 
 #
 # Author: Sayyed Jamal Ghasemi
 # Full Stack Developer
@@ -258,7 +257,7 @@ configure_global_security_features() {
         GLOBAL_FAIL2BAN_ENABLED="true"
 
         read -p "Global Fail2Ban default maxretry (default: 5): " GLOBAL_FAIL2BAN_DEFAULT_MAXRETRY
-        GLOBAL_FAIL2BAN_DEFAULT_MAXRETRY=${GLOBAL_FAIL2BAN_DEFAULT_MAXRETRY:-5}
+        GLOBAL_FAIL2Ban_DEFAULT_MAXRETRY=${GLOBAL_FAIL2BAN_DEFAULT_MAXRETRY:-5}
 
         read -p "Global Fail2Ban default findtime (e.g., 10m, 1h, default: 10m): " GLOBAL_FAIL2BAN_DEFAULT_FINDTIME
         GLOBAL_FAIL2BAN_DEFAULT_FINDTIME=${GLOBAL_FAIL2BAN_DEFAULT_FINDTIME:-10m}
@@ -362,8 +361,18 @@ configure_domain_basics() {
     local platform="$2"
 
     print_colored_message "blue" "\n--- Configuring Basic Settings for Domain: $domain ($platform) ---"
-    print_colored_message "yellow" "\nSet CDN IP source for $domain to support real IP in Nginx."
 
+    # ✅ بخش جدید برای مدیریت سناریوی انتقال سرور
+    print_colored_message "yellow" "\nThis next question is important for installing SSL certificates."
+    if ask_yes_no "Is this a server migration (i.e., the domain's DNS is NOT pointing to this new server yet)?" "n"; then
+        store_domain_setting "$domain" "skip_dns_check_for_migration" "true"
+        print_colored_message "green" "-> Migration mode enabled. SSL will be configured using the DNS-01 challenge method."
+    else
+        store_domain_setting "$domain" "skip_dns_check_for_migration" "false"
+        print_colored_message "green" "-> Standard mode enabled. SSL will be configured using the HTTP-01 challenge."
+    fi
+
+    print_colored_message "yellow" "\nSet CDN IP source for $domain to support real IP in Nginx."
     print_colored_message "yellow" "If Cloudflare, enter: cloudflare"
     print_colored_message "yellow" "If ArvanCloud, enter: arvancloud"
     print_colored_message "yellow" "If none (direct), enter: none"
