@@ -1,15 +1,34 @@
-# 03-install-php-composer-wpcli.yml
+---
+# -----------------------------------------------------------------------------
+# Ansible Playbook for Installing and Configuring PHP, Composer, and WP-CLI
+#
+# Author: Sayyed Jamal Ghasemi
+# Role: Full Stack Developer
+# Email: jamal13647850@gmail.com
+# LinkedIn: https://www.linkedin.com/in/jamal1364/
+# Instagram: https://www.instagram.com/jamal13647850
+# Telegram: https://t.me/jamaldev
+# Website: https://jamalghasemi.com
+# Date: 2025-06
+# -----------------------------------------------------------------------------
+
+# Section 1: Install and Configure PHP, PHP Extensions, and Composer on Target Servers
 - hosts: all
   become: true
+  name: "Install and Configure PHP, extensions, and Composer"
   vars:
-    # Define effective PHP version for this run
+    # Effective PHP version used during this playbook run,
+    # falling back to global or default '8.2' if not specified
     effective_php_version: "{{ domain_config.php_version | default(GLOBAL_PHP_DEFAULT_VERSION | default('8.2')) }}"
 
-    # Define effective OPcache settings
+    # Whether to enable PHP OPcache, defaulting to true if not overridden
     effective_enable_opcache: "{{ domain_config.enable_php_opcache | default(GLOBAL_ENABLE_PHP_OPCACHE | default(true)) }}"
-    effective_opcache_memory: "{{ domain_config.opcache_memory | default(GLOBAL_OPCACHE_MEMORY | default('128M')) }}" # e.g., 128M or 256M
 
-    # PHP INI settings with fallbacks (Global vars would be defined in group_vars/all.yml eventually)
+    # Amount of memory allocated for OPcache, with fallback value '128M'
+    effective_opcache_memory: "{{ domain_config.opcache_memory | default(GLOBAL_OPCACHE_MEMORY | default('128M')) }}"
+
+    # PHP INI configuration settings with fallbacks for upload size,
+    # max execution time, memory limit, and input vars/time
     php_ini_settings_map:
       upload_max_filesize: "{{ domain_config.php_upload_max_filesize | default(GLOBAL_PHP_UPLOAD_MAX_FILESIZE | default('64M')) }}"
       post_max_size: "{{ domain_config.php_post_max_size | default(GLOBAL_PHP_POST_MAX_SIZE | default('64M')) }}"
@@ -18,23 +37,24 @@
       max_input_vars: "{{ domain_config.php_max_input_vars | default(GLOBAL_PHP_MAX_INPUT_VARS | default('3000')) }}"
       max_input_time: "{{ domain_config.php_max_input_time | default(GLOBAL_PHP_MAX_INPUT_TIME | default('300')) }}"
 
+    # OPcache configuration parameters defined as key-value pairs
     opcache_ini_settings_map:
-      opcache.enable: "1" # Generally, if effective_enable_opcache is true, this should be 1
-      opcache.enable_cli: "1" # Often useful to enable for CLI too
-      opcache.memory_consumption: "{{ effective_opcache_memory | regex_replace('M$', '') }}" # Remove 'M' if present, as ini often takes number
-      opcache.interned_strings_buffer: "16" # Increased from 8
+      opcache.enable: "1"
+      opcache.enable_cli: "1"
+      opcache.memory_consumption: "{{ effective_opcache_memory | regex_replace('M$', '') }}"
+      opcache.interned_strings_buffer: "16"
       opcache.max_accelerated_files: "10000"
       opcache.revalidate_freq: "2"
       opcache.save_comments: "1"
       opcache.fast_shutdown: "1"
 
   tasks:
-    - name: Update APT package index
+    - name: Update APT package index cache
       ansible.builtin.apt:
         update_cache: yes
       tags: ['php', 'prerequisites', 'system']
 
-    - name: Install common software properties support
+    - name: Install software properties common packages required for PHP repository management
       ansible.builtin.apt:
         name:
           - software-properties-common
@@ -46,10 +66,11 @@
       ansible.builtin.apt_repository:
         repo: ppa:ondrej/php
         state: present
-        update_cache: yes # Update cache after adding new repo
+        update_cache: yes
       tags: ['php', 'repo']
 
-    - name: Install PHP version {{ effective_php_version }} and common extensions
+    - name: Install specified PHP version {{ effective_php_version }} and common PHP extensions
+      # Includes FPM, MySQL, Curl, MBString, OPcache, Redis, and others
       ansible.builtin.apt:
         name:
           - "php{{ effective_php_version }}"
@@ -57,29 +78,29 @@
           - "php{{ effective_php_version }}-common"
           - "php{{ effective_php_version }}-mysql"
           - "php{{ effective_php_version }}-xml"
-          - "php{{ effective_php_version }}-xmlrpc" # Often needed by WordPress
+          - "php{{ effective_php_version }}-xmlrpc"
           - "php{{ effective_php_version }}-curl"
           - "php{{ effective_php_version }}-gd"
           - "php{{ effective_php_version }}-imagick"
           - "php{{ effective_php_version }}-cli"
-          - "php{{ effective_php_version }}-imap"    # For email functionality
+          - "php{{ effective_php_version }}-imap"
           - "php{{ effective_php_version }}-mbstring"
           - "php{{ effective_php_version }}-opcache"
-          - "php{{ effective_php_version }}-soap"    # For SOAP APIs
+          - "php{{ effective_php_version }}-soap"
           - "php{{ effective_php_version }}-zip"
-          - "php{{ effective_php_version }}-intl"   # For internationalization
-          - "php{{ effective_php_version }}-bcmath" # For precision math
-          - "php{{ effective_php_version }}-gmp"    # For GMP math, sometimes needed by libraries
-          - "php{{ effective_php_version }}-redis"  # If Redis is used for sessions/cache at PHP level
-          - unzip # General utility
+          - "php{{ effective_php_version }}-intl"
+          - "php{{ effective_php_version }}-bcmath"
+          - "php{{ effective_php_version }}-gmp"
+          - "php{{ effective_php_version }}-redis"
+          - unzip
         state: present
       notify: Restart PHP-FPM service
       tags: ['php', 'install']
 
-    - name: Update PHP-FPM configuration (php.ini) for {{ effective_php_version }}
+    - name: Update main PHP-FPM configuration (php.ini) settings for version {{ effective_php_version }}
       ansible.builtin.lineinfile:
         path: "/etc/php/{{ effective_php_version }}/fpm/php.ini"
-        regexp: "^{{ item.key | regex_escape() }}\\s*=" # Ensure regexp is escaped and matches key followed by optional space and =
+        regexp: "^{{ item.key | regex_escape() }}\\s*="
         line: "{{ item.key }} = {{ item.value }}"
         state: present
       loop: "{{ php_ini_settings_map | dict2items }}"
@@ -88,13 +109,13 @@
       notify: Restart PHP-FPM service
       tags: ['php', 'config']
 
-    - name: Configure PHP OPcache for {{ effective_php_version }}
+    - name: Configure PHP OPcache settings for version {{ effective_php_version }}
       ansible.builtin.lineinfile:
-        path: "/etc/php/{{ effective_php_version }}/fpm/conf.d/10-opcache.ini" # Default OPcache config file
+        path: "/etc/php/{{ effective_php_version }}/fpm/conf.d/10-opcache.ini"
         regexp: "^{{ item.key | regex_escape() }}\\s*="
         line: "{{ item.key }}={{ item.value }}"
         state: present
-        create: false # Do not create if it doesn't exist, assume base opcache package creates it
+        create: false
       loop: "{{ opcache_ini_settings_map | dict2items }}"
       loop_control:
         label: "{{ item.key }}"
@@ -102,33 +123,73 @@
       notify: Restart PHP-FPM service
       tags: ['php', 'opcache', 'config']
 
-    - name: Ensure PHP-FPM service for {{ effective_php_version }} is running and enabled
+    - name: Ensure PHP-FPM service for PHP {{ effective_php_version }} is running and enabled on boot
       ansible.builtin.systemd:
         name: "php{{ effective_php_version }}-fpm"
         state: started
         enabled: yes
       tags: ['php', 'service']
 
-    - name: Install Composer (globally)
+    - name: Install Composer globally on the system
+      # Composer is installed by downloading the installer and placing the binary in /usr/local/bin
       ansible.builtin.shell: |
         curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
       args:
-        creates: /usr/local/bin/composer # Makes the task idempotent
-      changed_when: false # Shell module always reports changed unless specifically told not to. 'creates' handles idempotency.
+        creates: /usr/local/bin/composer
+      changed_when: false
       tags: ['composer', 'tools', 'system']
 
-    - name: Install WP-CLI (globally)
+  handlers:
+    - name: Restart PHP-FPM service
+      # Handler to restart the PHP-FPM service whenever notified by a task
+      ansible.builtin.systemd:
+        name: "php{{ effective_php_version }}-fpm"
+        state: restarted
+      listen: "Restart PHP-FPM service"
+
+# -----------------------------------------------------------------------------
+# Section 2: Latest WP-CLI Installation Using a Reliable and Up-to-date Method
+# -----------------------------------------------------------------------------
+
+# Step 1: Download the latest WP-CLI Phar archive on the local machine (localhost)
+- hosts: localhost
+  connection: local
+  become: false
+  name: "Download the latest WP-CLI to the local machine"
+  gather_facts: false
+
+  tasks:
+    - name: Download latest wp-cli.phar to temporary folder /tmp/ on localhost
       ansible.builtin.get_url:
         url: https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+        dest: /tmp/wp-cli.phar
+        mode: '0644'
+        force: yes  # Always download to ensure the latest version is fetched
+
+# Step 2: Copy the downloaded WP-CLI file from local machine to the target servers
+- hosts: all
+  become: true
+  name: "Copy WP-CLI executable to target servers"
+
+  tasks:
+    - name: Copy locally downloaded wp-cli.phar to /usr/local/bin/wp on target servers
+      ansible.builtin.copy:
+        src: /tmp/wp-cli.phar
         dest: /usr/local/bin/wp
         mode: '0755'
         owner: root
         group: root
       tags: ['wpcli', 'tools', 'system']
 
-  handlers:
-    - name: Restart PHP-FPM service
-      ansible.builtin.systemd: # Using systemd module for handler as well
-        name: "php{{ effective_php_version }}-fpm"
-        state: restarted
-      listen: "Restart PHP-FPM service" # Explicit listener name
+# Step 3 (Optional): Remove the temporary WP-CLI Phar file from the local machine to clean up
+- hosts: localhost
+  connection: local
+  become: false
+  name: "Clean up temporary WP-CLI file on the local machine"
+  gather_facts: false
+
+  tasks:
+    - name: Remove temporary wp-cli.phar from /tmp/ directory on localhost
+      ansible.builtin.file:
+        path: /tmp/wp-cli.phar
+        state: absent
