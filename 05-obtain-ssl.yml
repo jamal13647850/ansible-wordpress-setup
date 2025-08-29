@@ -17,13 +17,17 @@
   name: "Obtain and configure SSL certificates"
 
   vars:
-    # Intelligent domain list creation to avoid issues like double 'www.www' prefix
-    # 1. Initial list contains only the base domain
+    # Domain List Configuration for SSL Certificate Generation
+    # =====================================================
+    
+    # Step 1: Initialize with the primary domain from configuration
     certbot_domain_list:
       - "{{ domain_config.domain }}"
 
-    # 2. If the domain does not start with 'www.', add the 'www.' prefixed version to the list
-    certbot_domain_list_final: >-
+    # Step 2: Smart www subdomain handling
+    # Adds 'www.' prefixed version only if the domain doesn't already start with 'www.'
+    # This prevents double prefixes like 'www.www.example.com'
+    certbot_domain_list_final: >
       {{
         certbot_domain_list +
         ['www.' + domain_config.domain]
@@ -31,28 +35,34 @@
         else certbot_domain_list
       }}
 
-    # 3. Generate the CLI -d arguments for certbot for all domains in the list
-    certbot_domains_cli: >-
-      {{
-        certbot_domain_list_final
-        | map('regex_replace', '^(.*)$', '-d \\1')
-        | join(' ')
-      }}
+    # Step 3: Generate Certbot CLI domain arguments
+    # Creates a space-separated list of '-d domain.com -d www.domain.com' format
+    # Using Jinja2 loop instead of regex_replace for better reliability
+    certbot_domains_cli: >
+      {% for domain in certbot_domain_list_final %}-d {{ domain }}{% if not loop.last %} {% endif %}{% endfor %}
 
-    # Variable to control skipping of DNS check during server migration scenario
+    # SSL Certificate Configuration
+    # ============================
+    
+    # Migration scenario control - skips DNS validation when migrating servers
     skip_dns_check_for_migration: "{{ domain_config.skip_dns_check_for_migration | default(false) }}"
 
-    # Email associated with SSL certificate registration, fallback to global default
+    # Email for Let's Encrypt registration (domain-specific or global fallback)
     effective_ssl_email: "{{ domain_config.ssl_email | default(GLOBAL_LETSENCRYPT_DEFAULT_EMAIL | default('')) }}"
 
-    # Flag indicating whether to use Let's Encrypt staging environment (test certs)
+    # Test certificate flag - uses Let's Encrypt staging environment for testing
     le_test_cert: "{{ domain_config.letsencrypt_test_cert | default(GLOBAL_LETSENCRYPT_TEST_CERT | default(false)) }}"
 
-    # Option for certbot to use staging server if test cert is enabled
+    # Certbot Command Options
+    # ======================
+    
+    # Use staging server for test certificates (avoids rate limits during testing)
     le_staging_server_option: "{% if le_test_cert | bool %}--test-cert{% else %}{% endif %}"
-
-    # Options for certbot command
+    
+    # Automatically redirect HTTP to HTTPS after certificate installation
     le_redirect_option: "--redirect"
+    
+    # Use Nginx plugin for automatic certificate installation and configuration
     le_nginx_plugin_option: "--nginx"
 
   tasks:
@@ -107,14 +117,27 @@
     - name: "Block for DNS-01 challenge (Migration Scenario)"
       when: skip_dns_check_for_migration
       block:
-        - name: "Placeholder for obtaining SSL certificate using DNS-01 challenge"
+        - name: "DNS-01 Challenge Implementation Required (Migration Scenario)"
           ansible.builtin.debug:
             msg:
-              - "SKIPPING HTTP-01 check due to migration scenario."
-              - "Please replace this task with a real DNS-01 challenge implementation."
-              - "Example for Cloudflare:"
-              - " certbot certonly --dns-cloudflare --dns-cloudflare-credentials /path/to/creds.ini {{ certbot_domains_cli }}"
-              - "ACTION REQUIRED: Install required plugins and provide credentials."
+              - "==============================================="
+              - "HTTP-01 VALIDATION SKIPPED - MIGRATION MODE"
+              - "==============================================="
+              - "Domain configuration: {{ domain_config.domain }}"
+              - "Domains for certificate: {{ certbot_domain_list_final }}"
+              - "Generated certbot arguments: {{ certbot_domains_cli }}"
+              - ""
+              - "ACTION REQUIRED: Implement DNS-01 challenge"
+              - "Examples for common DNS providers:"
+              - " • Cloudflare: certbot certonly --dns-cloudflare --dns-cloudflare-credentials /path/to/cloudflare.ini {{ certbot_domains_cli }}"
+              - " • DigitalOcean: certbot certonly --dns-digitalocean --dns-digitalocean-credentials /path/to/digitalocean.ini {{ certbot_domains_cli }}"
+              - " • AWS Route53: certbot certonly --dns-route53 {{ certbot_domains_cli }}"
+              - ""
+              - "Required steps:"
+              - "1. Install appropriate certbot DNS plugin"
+              - "2. Create credentials file with DNS API keys"
+              - "3. Replace this debug task with actual DNS-01 command"
+              - "==============================================="
           register: certbot_result
           changed_when: false
 
@@ -124,22 +147,26 @@
       register: ssl_cert_stat
       tags: ['ssl', 'cert_check']
 
-    - name: "Display Certbot command result for debugging"
+    - name: "Display Certbot command and result for debugging"
       ansible.builtin.debug:
-        var: certbot_result
+        msg:
+          - "Executed Certbot command with domains: {{ certbot_domains_cli }}"
+          - "Domain list processed: {{ certbot_domain_list_final }}"
+          - "Certbot result: {{ certbot_result }}"
         verbosity: 1
       when:
         - certbot_result is defined
         - "'msg' not in certbot_result"  # Avoid showing debug placeholder message
       tags: ['ssl', 'certbot', 'debug']
 
-    - name: "Finalize Nginx configuration with SSL settings when new cert is issued"
+    - name: "Update Nginx configuration with SSL settings after certificate installation"
       ansible.builtin.template:
         src: "templates/nginx.conf.j2"
         dest: "/etc/nginx/sites-available/{{ domain_config.domain }}.conf"
         mode: '0644'
         owner: root
         group: root
+        backup: yes  # Create backup of existing config before modification
       notify: Restart Nginx service
       when:
         - (certbot_result.changed | default(false)) 
