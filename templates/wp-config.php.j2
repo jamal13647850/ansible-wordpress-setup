@@ -57,7 +57,18 @@ define('WP_REDIS_DATABASE', {{ domain_config.wp_redis_database | default(0) }});
 {% endif %}
 {% endif %}
 
-if (!defined('ABSPATH')) { # [cite: 371]
-    define('ABSPATH', dirname(__FILE__) . '/'); # [cite: 371]
+/* Custom user table definitions for security plugins */
+{% if domain_config.secure_database | default(GLOBAL_SECURE_DATABASE_POLICY | default(true)) %}
+// For security plugins that rename user tables (e.g., iThemes Security)
+if (isset($table_prefix)) {
+    define('CUSTOM_USER_TABLE', $table_prefix . 'users_custom');
+    define('CUSTOM_USER_META_TABLE', $table_prefix . 'usermeta_custom');
 }
-require_once(ABSPATH . 'wp-settings.php'); # [cite: 371]
+{% endif %}
+
+/* That's all, stop editing! Happy publishing. */
+
+if (!defined('ABSPATH')) {
+    define('ABSPATH', dirname(__FILE__) . '/');
+}
+require_once(ABSPATH . 'wp-settings.php');

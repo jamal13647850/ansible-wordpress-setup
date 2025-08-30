@@ -71,23 +71,8 @@
       notify: Restart MySQL service
       tags: ['database', 'security', 'mysql_config', 'system']
 
-    - name: "Add custom user/usermeta table defines to wp-config.php for {{ _app_domain }}"
-      ansible.builtin.blockinfile:
-        path: "{{ _wp_config_path }}"
-        marker: "// {mark} ANSIBLE MANAGED BLOCK FOR CUSTOM USER TABLES"
-        block: |
-          // For security plugins that rename user tables (e.g., iThemes Security)
-          // Ensure $table_prefix is defined before this block in wp-config.php
-          if (isset($table_prefix)) {
-            define('CUSTOM_USER_TABLE', $table_prefix . 'users_custom');
-            define('CUSTOM_USER_META_TABLE', $table_prefix . 'usermeta_custom');
-          }
-        insertbefore: "^\\/\\*\\s*That's all, stop editing! Happy publishing\\.\\s*\\*\\/"
-        create: false # Do not create wp-config.php
-      when: domain_config.platform == "wordpress"
-      tags: ['database', 'security', 'wordpress', 'wp-config', 'domain_specific']
-      # Note: Merely defining these constants does not rename the tables.
-      # Table renaming must be done separately by a plugin or manually.
+    # Custom user table definitions are now included directly in wp-config.php template
+    # No additional blockinfile task needed
 
   handlers:
     - name: Restart MySQL service
