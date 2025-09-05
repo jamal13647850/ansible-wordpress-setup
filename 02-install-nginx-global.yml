@@ -72,14 +72,62 @@
         update_cache: yes
       tags: ['nginx', 'install']
 
-    - name: Install CSF (ConfigServer Security & Firewall) if not already present
-      ansible.builtin.shell: |
-        wget -qO- https://download.configserver.com/csf.tgz | tar -xzf -
-        cd csf && sh install.sh
-      args:
-        creates: /etc/csf/csf.conf
-        chdir: /tmp
+    - name: Check if CSF is already installed
+      ansible.builtin.stat:
+        path: /etc/csf/csf.conf
+      register: csf_config_exists
       tags: ['firewall', 'csf', 'security', 'system']
+
+    - name: Download CSF (ConfigServer Security & Firewall) from GitHub
+      ansible.builtin.get_url:
+        url: https://github.com/waytotheweb/scripts/blob/main/csf.tgz?raw=true
+        dest: /tmp/csf.tgz
+        mode: '0644'
+        timeout: 60
+        force: true
+      tags: ['firewall', 'csf', 'security', 'system']
+      when: not ansible_check_mode and not csf_config_exists.stat.exists
+
+    - name: Extract CSF tarball to /tmp with verification
+      ansible.builtin.unarchive:
+        src: /tmp/csf.tgz
+        dest: /tmp
+        remote_src: yes
+        creates: /tmp/csf
+        mode: '0755'
+        validate_certs: false
+      register: csf_extract_result
+      failed_when: csf_extract_result is failed
+      tags: ['firewall', 'csf', 'security', 'system']
+      when: not ansible_check_mode and not csf_config_exists.stat.exists
+
+    - name: Verify CSF extraction was successful
+      ansible.builtin.stat:
+        path: /tmp/csf/install.sh
+      register: csf_install_script
+      failed_when: not csf_install_script.stat.exists
+      tags: ['firewall', 'csf', 'security', 'system']
+      when: not ansible_check_mode and not csf_config_exists.stat.exists
+
+    - name: Install CSF using the installation script
+      ansible.builtin.command:
+        cmd: /bin/sh install.sh
+        chdir: /tmp/csf
+        creates: /etc/csf/csf.conf
+      register: csf_install_result
+      failed_when: csf_install_result.rc != 0
+      tags: ['firewall', 'csf', 'security', 'system']
+      when: not ansible_check_mode and not csf_config_exists.stat.exists
+
+    - name: Clean up CSF installation files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/csf.tgz
+        - /tmp/csf
+      tags: ['firewall', 'csf', 'security', 'system']
+      when: not ansible_check_mode
 
     - name: Ensure Nginx runs as www-data user
       ansible.builtin.lineinfile:
