@@ -40,7 +40,7 @@ mkdir -p "$LOG_DIR"
 CURRENT_TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 MAIN_LOG_FILE="$LOG_DIR/deployment_main_$CURRENT_TIMESTAMP.log"
 PLAYBOOK_LOG_FILE_PREFIX="$LOG_DIR/playbook_detail"
-INVENTORY_FILE="inventory"
+INVENTORY_FILE="inventory.ini"
 STATE_FILE=".ansible_run_state"
 
 # Color codes for terminal output

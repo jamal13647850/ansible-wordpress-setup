@@ -67,6 +67,19 @@
         repo: ppa:ondrej/php
         state: present
         update_cache: yes
+      retries: 3
+      delay: 10
+      register: php_ppa_result
+      failed_when: false
+      tags: ['php', 'repo']
+
+    - name: Add PHP PPA manually if apt_repository failed
+      ansible.builtin.shell: |
+        add-apt-repository -y ppa:ondrej/php
+        apt-get update
+      when: php_ppa_result is failed
+      retries: 2
+      delay: 15
       tags: ['php', 'repo']
 
     - name: Install specified PHP version {{ effective_php_version }} and common PHP extensions
