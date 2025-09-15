@@ -141,12 +141,6 @@
           register: certbot_result
           changed_when: false
 
-    - name: "Check existence of SSL certificate before finalizing configuration"
-      ansible.builtin.stat:
-        path: "/etc/letsencrypt/live/{{ domain_config.domain }}/fullchain.pem"
-      register: ssl_cert_stat
-      tags: ['ssl', 'cert_check']
-
     - name: "Display Certbot command and result for debugging"
       ansible.builtin.debug:
         msg:
@@ -168,9 +162,7 @@
         group: root
         backup: yes  # Create backup of existing config before modification
       notify: Restart Nginx service
-      when:
-        - (certbot_result.changed | default(false)) 
-        - not ssl_cert_stat.stat.exists
+      when: certbot_result.changed | default(false)
       tags: ['ssl', 'nginx', 'finalize']
 
   handlers:
